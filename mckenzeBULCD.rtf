@@ -1,0 +1,88 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww37860\viewh20540\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+////                                                                      ///////////////////////////////////////////////////////////////////////////////////////////////////////////\
+////     FOREST LOSS ENSEMBLE: GENERATE BULC-D OUPUTS                     ///////////////////////////////////////////////////////////////////////////////////////////////////////////\
+////                                                                      ///////////////////////////////////////////////////////////////////////////////////////////////////////////\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+//\
+// Detailed Instructions Here: \
+//  https://docs.google.com/document/d/1Zf7JwQmZ9hGUo1an56qp8YnkaDlRMAUQp9nCuXUNuNs/edit?usp=sharing\
+//\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+\
+// Point CFG variable to your ENSEMBLE config file. \
+// > The config file should have been created in section I.A.2.. \
+// > Path Format: "users/<your user name>/<cloud project>:<folder>/<file name>"\
+    var CFG = require("users/msime/forestChangeEnsemble:EnsembleWorkflow/I.A.1.EnsembleParameterConfigFile");\
+\
+// *** BULC-D is run twice, one version optimized for evergreen forests (stable), and one for deciduous forests (seasonality). Export both products. \
+\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+//  NO CHANGES NEED TO BE MADE BELOW THIS LINE.  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\
+\
+// Import ensemble functions library\
+    var ensembleLib = require('users/msime/forestChangeEnsemble:forestEnsembleFunctions');\
+\
+// Get parameters from config file. \
+    var cfgObject = CFG.config;\
+    \
+    // Assign variables.\
+        var aoi = cfgObject.aoi;\
+        var startDate = cfgObject.startDate; \
+        var endDate = cfgObject.endDate;  \
+        var forestMask = cfgObject.forestMask; \
+        var assetFolder = cfgObject.bulcdAssetFolder;\
+        var exportCrs = cfgObject.exportCrs;\
+\
+// Center on the AOI. \
+    Map.centerObject(aoi); \
+  \
+// Convert AOI to a rectangle. \
+    var aoi = aoi.bounds();\
+\
+// Get the full BULC-D change maps.\
+// > Two versions of BULC-D are run, one that performs well in evergreen forests and one in deciduous forests. \
+      var bulcdYoiStable = ensembleLib.getBulcdYoiStable(aoi, startDate, endDate, forestMask); \
+      var bulcdYoiSeasonality = ensembleLib.getBulcdYoiSeasonality(aoi, startDate, endDate, forestMask);\
+\
+// Export the change product image.  \
+  \
+  // Create a standardized, descriptive name for the BULCD change images. \
+    var bulcdOutputNameStable = assetFolder + "bulcd_Stable_" + startDate + "_" + endDate;\
+    var bulcdOutputNameSeasonality = assetFolder + "bulcd_Seasonality_" + startDate + "_" + endDate;\
+    \
+  // Exporting the BULC-D stable image. \
+    Export.image.toAsset(\{\
+      image: bulcdYoiStable, \
+      description: "BULCD_Image_Export_Stable",\
+      assetId: bulcdOutputNameStable,\
+      region: aoi, \
+      scale: 30, \
+      crs: exportCrs, \
+      maxPixels: 1e13\
+    \});\
+    \
+  // Exporting the BULC-D seasonality image. \
+    Export.image.toAsset(\{\
+      image: bulcdYoiSeasonality, \
+      description: "BULCD_Image_Export_Seasonality",\
+      assetId: bulcdOutputNameSeasonality,\
+      region: aoi, \
+      scale: 30, \
+      crs: exportCrs, \
+      maxPixels: 1e13\
+    \});\
+\
+\
+\
+\
+}
