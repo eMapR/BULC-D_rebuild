@@ -7,13 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This folder is the planning/reference workspace for **modernizing BULC-D**
 (Bayesian Updating of Land Cover Detection), a probabilistic forest-change-
 detection algorithm originally built in Google Earth Engine (GEE) JavaScript.
-There is no runnable code here yet — the folder currently holds the design
-vision and reference copies of the *existing* production implementation that
-the rebuild is meant to replace. Treat this as a pre-implementation stage:
-read the reference material before proposing architecture. The target
-platform has been decided — **Python + `earthengine-api`** (see "Platform
-decision" below) — so scaffolding new code is unblocked, but still confirm
-scope/approach with the user before large structural changes.
+Early scaffold stage: the folder holds the design vision and reference
+copies of the *existing* production implementation the rebuild replaces,
+plus a starting `bulcd/` Python package (currently just a draft config
+schema, `bulcd/config/schema.py` — no engine/algorithm code yet). Read the
+reference material before proposing architecture. The target platform has
+been decided — **Python + `earthengine-api`** (see "Platform decision"
+below) — so scaffolding new code is unblocked, but still confirm
+scope/approach with the user before large structural changes. This is a
+git repo (initialized 2026-07-28); commit as normal.
 
 ## Contents
 
