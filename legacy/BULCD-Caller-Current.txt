@@ -1,0 +1,278 @@
+/*
+This script runs the BULC-D algorithm for land cover classification analysis using the
+Bayesian Updating of Land Cover with Deviation (BULC-D) module.
+
+How to use the Script:
+
+1. Set Verbose Mode (Optional):
+   - You can enable verbose logging by setting the `verbose` flag to `true`.
+   - This will print additional information during the execution of the script, including intermediate results and detailed operation steps.
+
+2. Input Parameters (Required):
+   - The script requires several parameter files to run the BULC-D analysis:
+     - BULCD-AdvancedParameters: Contains advanced configurations for the BULC process, such as transition matrices or more detailed outputs.
+     - BULCD-InputParameters: Defines the basic input parameters such as the study area, sensor settings, bin cuts and the value to track.
+     - BULCD-AnalysisParameters: Specifies the thresholds and conditions for interpreting and analyzing the results using bulcd results.
+
+3. Running the script:
+   - The script first organizes input data using `afn_organizeBULCD_Inputs()` and then calls the BULC-D function using the `afn_BULCD()` function with the specified parameters.
+   - The `bulcdParams` object is populated with necessary data such as the z-scores and bin cuts, pulled from the input parameters.
+
+4. Water Mask and displaying results:
+   - A water mask is applied to remove areas of water from the analysis using `afn_waterMask()`.
+   - After running BULC-D, the resulting probability images are displayed on the map:
+     - "Final BULC Probabilities RGB" – The combined probability output.
+     - "Probability of Value Increase" – The likelihood of an increase.
+     - "Probability of Value Unchanged" – The likelihood of no change.
+     - "Probability of Value Decrease" – The likelihood of a decrease.
+     - "Expectation Year: Summary Value" – Summary statistics for the expectation years.
+     - "Target Year: Summary Value" – Summary statistics for the target year.
+
+5. Post-Run Analysis:
+   - After the BULC-D run, you can configure post-run analysis using the `var_args_analysis` object. This includes thresholds for detecting change and setting up additional conditions for analysis.
+*/
+
+
+// This version is equivalent to
+// the below version number
+// in the Cardille lab development environment
+var theVersion = "V52a"
+print("BULC-D-Caller, Version ", theVersion)
+
+var verbose = true
+if (verbose) {
+    print("running BULC-D in verbose mode from the caller.")
+}
+
+// //=======================================================================================================
+// /*
+//           Requires
+// */
+// //=======================================================================================================
+
+// main code for BULC-D.
+var afn_BULCD = require('users/alemlakes/r-2903-Dev:BULC/BULCD/BULCD-Code/BULCD-Module/6002.B2-BULCD-Module').afn_BULCD;
+
+var afn_organizeBULCD_Inputs = require('users/alemlakes/r-2903-Dev:BULC/BULCD/BULCD-Code/BULCD-Module/6002.A2b.3-BULCD-Module-organizeBULCD_Inputs').afn_organizeBULCD_Inputs;
+
+// BULC-D calls BULC as part of its operation. The BULC Parameter Dictionary is unlikely to change, but could be tweaked by an advanced user,
+// for example to show more intermediate results or the transition matrix. This pulls in the values that BULC needs to run.
+var advancedParameters = require('users/alemlakes/r-2909-BULC-Releases:BULC/BULC-Callers-Current/BULCD-Caller-Parameters/BULCD-AdvancedParameters-v5').advancedParameters;
+var inputParameters =    require('users/alemlakes/r-2909-BULC-Releases:BULC/BULC-Callers-Current/BULCD-Caller-Parameters/BULCD-InputParameters-v5').inputParameters;
+var analysisParameters = require('users/alemlakes/r-2909-BULC-Releases:BULC/BULC-Callers-Current/BULCD-Caller-Parameters/BULCD-AnalysisParameters-v5').analysisParameters;
+var exportParams = require('users/alemlakes/r-2909-BULC-Releases:BULC/BULC-Callers-Current/BULCD-Caller-Parameters/BULCD-ExportParameters-v5').exportParameters;
+
+// Stage 3: Analysis.
+var interpretResults = require('users/alemlakes/r-2902-Dev:BULC/BULCD/BULCD-Code/BULCD-Module/6002.C2-BULCD-Module-analyzeOutputs').afn_interpretBULCDResult;
+
+var afn_waterMask = require('users/alemlakes/CommonCode:513.waterMask/513-waterMask').afn_waterMask;
+
+// //=======================================================================================================
+//     Step 1. Assemble Collections
+// //=======================================================================================================
+print(inputParameters, 'inputParameters')
+var bulcD_input = afn_organizeBULCD_Inputs(inputParameters);
+
+print(bulcD_input, 'bulcD_input');
+exports.bulcD_input = bulcD_input;
+
+var bulcdParams = {}
+bulcdParams.defaultStudyArea = inputParameters.defaultStudyArea
+bulcdParams.theTargetYear = inputParameters.theTargetYear
+bulcdParams.binCuts = inputParameters.binCuts
+bulcdParams.targetLOFAsZScore = bulcD_input.targetLOFAsZScore
+
+// pulls the BULC-specific parameter set from another file.
+var BULCargumentDictionaryPlus = advancedParameters()
+bulcdParams.BULCargumentDictionaryPlus = BULCargumentDictionaryPlus
+
+// //=======================================================================================================
+//     Step 2. Run BULCD
+// //=======================================================================================================
+var bulcD = afn_BULCD(bulcdParams)
+print(bulcD, 'Full BULC-D return object')
+
+
+var theWaterMask = afn_waterMask().not()
+var finalBulcProbs = ee.Image(bulcD.finalBULCprobs).updateMask(theWaterMask);
+
+Map.centerObject(inputParameters.defaultStudyArea, 18)
+
+// //=======================================================================================================
+//     Step 3. Display Results
+// //=======================================================================================================
+
+Map.addLayer(bulcD.allBULCLayers, {}, "All bulc layers")
+Map.addLayer(bulcD.allProbabilityLayers, {}, "Bulc probabilities")
+Map.addLayer(finalBulcProbs, {}, "Final BULC Probabilities RGB ", false);
+Map.addLayer(finalBulcProbs.select(2), {}, "Probability of Value Increase ", false, 1);
+Map.addLayer(ee.Image(finalBulcProbs).select(1), {}, "Probability of Value Unchanged ", false, 1);
+Map.addLayer(ee.Image(finalBulcProbs).select(0), {}, "Probability of Value Decrease ", true, 1);
+
+var expectationPeriodSummaryValue = ee.Image(bulcD_input.expectationPeriodSummaryValue);
+var expectationPeriodSD = ee.Image(bulcD_input.expectationPeriodSD);
+
+
+Map.addLayer(expectationPeriodSummaryValue, { min: 0, max: 0.8 }, "Expectation Year: Summary value ", true);
+Map.addLayer(ee.ImageCollection(bulcD_input.expectCollectionFit).select([inputParameters.bandNameToFit, 'fitted']), { min: 0, max: 0.8 }, "Expectation Year: Fitted values ", true);
+Map.addLayer(expectationPeriodSD, { min: 0, max: 0.8 }, "Expectation Year: Std. Deviation ", false);
+Map.addLayer(ee.Image(bulcD.allEventLayers), {}, "Binned Event Values ", false, 1);
+
+var targetPeriodSummaryValue = ee.Image(bulcD_input.targetPeriodSummaryValue);
+Map.addLayer(targetPeriodSummaryValue.updateMask(theWaterMask), { min: 0, max: 0.8 }, "Target Year: Summary value ", false);
+
+// //=======================================================================================================
+//     Step 4. Post run analysis
+// //=======================================================================================================
+var var_args_analysis = {
+  changeThreshold: analysisParameters.changeThreshold,
+  expPeriodMeanThreshold: analysisParameters.expPeriodMeanThreshold,
+  targetPeriodMeanThreshold: analysisParameters.targetPeriodMeanThreshold,
+
+  dropThresholdToDenoteChange: analysisParameters.dropThresholdToDenoteChange,
+  gainThresholdToDenoteChange: analysisParameters.gainThresholdToDenoteChange,
+
+  defaultStudyArea: inputParameters.defaultStudyArea,
+
+  expectationPeriodMean: bulcD_input.expectationPeriodMean,
+
+  targetPeriodMean: bulcD_input.targetPeriodMean,
+  theTargetYear: inputParameters.theTargetYear,
+
+  endingChangeThreshold: analysisParameters.changeProbability,
+
+  maxExportPixels : analysisParameters.maxExportPixels,
+
+  theFinalBULCprobs: bulcD.finalBULCprobs,
+
+  expectationPeriodSummaryValue: bulcD_input.expectationPeriodSummaryValue,
+  expectationPeriodSD: bulcD_input.expectationPeriodSD,
+  targetPeriodSummaryValue: bulcD_input.targetPeriodSummaryValue,
+
+  binCuts: inputParameters.binCuts,
+  whichReduction: inputParameters.whichReduction,
+
+  probabilityStackThroughTime: bulcD.allProbabilityLayers,
+
+  wasItEverType : (analysisParameters.wasItEverType ? analysisParameters.wasItEverType : 'down'),
+  wasItEverComparison : (analysisParameters.wasItEverComparison ? analysisParameters.wasItEverComparison : 'gt'),
+  wasItEverValue : (analysisParameters.wasItEverValue ? analysisParameters.wasItEverValue : 0.3),
+  timing: {
+    threshhold: (analysisParameters.timingThreshhold ? analysisParameters.timingThreshhold : 0.3),
+    changeLayer: ee.Image(1),
+    dayStepSize: inputParameters.expectationCollectionParameters.dayStepSize,
+    targetFirstDOY: inputParameters.trgfDOY ? inputParameters.trgfDOY : 1
+  },
+
+  waterMask: theWaterMask,
+}
+
+print("Parameters for post run analysis", var_args_analysis)
+
+var bulcD_output = interpretResults(var_args_analysis);
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////// Export  /////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+var bands = exportParams.includeBands || {};
+
+var exportImage = ee.Image([]);
+
+if (bands.finalBULCProbs && bands.finalBULCProbs.enabled) {
+    exportImage = exportImage
+        .addBands(finalBulcProbs.select([0], ['prob_decrease']))
+        .addBands(finalBulcProbs.select([1], ['prob_unchanged']))
+        .addBands(finalBulcProbs.select([2], ['prob_increase']));
+}
+
+if (bands.probabilityDecrease && bands.probabilityDecrease.enabled) {
+    exportImage = exportImage.addBands(finalBulcProbs.select([0], ['probability_decrease']));
+}
+
+if (bands.probabilityUnchanged && bands.probabilityUnchanged.enabled) {
+    exportImage = exportImage.addBands(finalBulcProbs.select([1], ['probability_unchanged']));
+}
+
+if (bands.probabilityIncrease && bands.probabilityIncrease.enabled) {
+    exportImage = exportImage.addBands(finalBulcProbs.select([2], ['probability_increase']));
+}
+
+if (bands.expectationSummaryValue && bands.expectationSummaryValue.enabled) {
+    exportImage = exportImage.addBands(expectationPeriodSummaryValue.rename('expectation_summary').updateMask(theWaterMask));
+}
+
+if (bands.expectationStdDev && bands.expectationStdDev.enabled) {
+    exportImage = exportImage.addBands(expectationPeriodSD.rename('expectation_stddev').updateMask(theWaterMask));
+}
+
+if (bands.expectationR2 && bands.expectationR2.enabled && bulcD_input.theExpectationR2) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_input.theExpectationR2).rename('expectation_r2').updateMask(theWaterMask));
+}
+
+if (bands.expectationResiduals && bands.expectationResiduals.enabled && bulcD_input.theExpectationResiduals) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_input.theExpectationResiduals).rename('expectation_residuals').updateMask(theWaterMask));
+}
+
+if (bands.targetSummaryValue && bands.targetSummaryValue.enabled) {
+    exportImage = exportImage.addBands(targetPeriodSummaryValue.rename('target_summary').updateMask(theWaterMask));
+}
+
+if (bands.dropProbability && bands.dropProbability.enabled && bulcD_output.drop) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.drop).rename('drop_probability').updateMask(theWaterMask));
+}
+
+if (bands.gainProbability && bands.gainProbability.enabled && bulcD_output.up) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.up).rename('gain_probability').updateMask(theWaterMask));
+}
+
+if (bands.largeDropOrange && bands.largeDropOrange.enabled && bulcD_output.largeDropOrange) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.largeDropOrange).rename('large_drop_orange').updateMask(theWaterMask));
+}
+
+if (bands.threeColorChange && bands.threeColorChange.enabled && bulcD_output.drop && bulcD_output.largeDropOrange && bulcD_output.up) {
+    var threeColor = ee.Image(bulcD_output.drop).unmask()
+        .where(ee.Image(bulcD_output.drop).eq(1), 1)
+        .where(ee.Image(bulcD_output.largeDropOrange).eq(1), 2)
+        .where(ee.Image(bulcD_output.up).eq(1), 3)
+        .selfMask();
+    exportImage = exportImage.addBands(threeColor.rename('three_color_change'));
+}
+
+if (bands.wasItEver && bands.wasItEver.enabled && bulcD_output.wasItEver) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.wasItEver).rename('was_it_ever').selfMask());
+}
+
+if (bands.howOftenWasIt && bands.howOftenWasIt.enabled && bulcD_output.howOftenWasIt) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.howOftenWasIt).rename('how_often_was_it').selfMask());
+}
+
+if (bands.orangeChangeDOY && bands.orangeChangeDOY.enabled && bulcD_output.timing && bulcD_output.timing.orangeDateDOY) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.timing.orangeDateDOY).rename('orange_change_doy'));
+}
+
+if (bands.pinkChangeDOY && bands.pinkChangeDOY.enabled && bulcD_output.timing && bulcD_output.timing.pinkDateDOY) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.timing.pinkDateDOY).rename('pink_change_doy'));
+}
+
+if (bands.orangeStepDating && bands.orangeStepDating.enabled && bulcD_output.timing && bulcD_output.timing.orangeStepDating) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.timing.orangeStepDating).rename('orange_step_dating'));
+}
+
+if (bands.pinkStepDating && bands.pinkStepDating.enabled && bulcD_output.timing && bulcD_output.timing.pinkStepDating) {
+    exportImage = exportImage.addBands(ee.Image(bulcD_output.timing.pinkStepDating).rename('pink_step_dating'));
+}
+
+if (exportParams.enabled !== false) {
+    var assetId = exportParams.assetId
+    var description = exportParams.description
+
+    Export.image.toAsset({
+        image: exportImage.toFloat(),
+        description: description,
+        assetId: assetId,
+        region: inputParameters.defaultStudyArea,
+        scale: 30,
+        maxPixels: 1e13
+    });
+}

@@ -27,6 +27,10 @@ GEE.
 - `mckenzeBULCD.rtf` — reference copy of the non-interactive,
   config-driven way BULC-D is invoked in production today, without the
   GUI. Closest in spirit to the target of this rebuild.
+- `legacy/` — additional reference scripts pulled from the GEE Code
+  Editor (current production caller + a real input parameter file).
+  See `CLAUDE.md` for what these reveal and what source is still
+  missing.
 - `BULCD_Modernization_Vision.docx` — the design brief: goals and
   constraints for the rebuild.
 - `CLAUDE.md` — detailed project context and decisions for AI-assisted

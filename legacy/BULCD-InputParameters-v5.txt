@@ -1,0 +1,298 @@
+/////////////////////////////////////////
+// specify values for items whose values span sensors
+/////////////////////////////////////////
+
+// var defaultStudyArea = ee.FeatureCollection("projects/servir-sco-assets/assets/SCO_CA/izabal_motagua");
+// var defaultStudyArea = Guatemala_AOI
+
+var coordinates = "[[[-126.04, 49.59],[-126.04, 40.76],[-118.93, 40.76],[-118.93, 49.59]]]"
+coordinates = (coordinates.replace(/\s+/g, ' ').trim());
+coordinates = [JSON.parse(coordinates)];
+coordinates = coordinates[0];
+
+var defaultStudyArea = ee.Geometry({
+    'type': 'Polygon',
+    'coordinates': coordinates,
+    'geodesic': false
+})
+
+Map.setOptions('HYBRID');
+
+Map.centerObject(ee.Geometry.Point([-123.55091549548354,42.88031651945386]), 16)
+
+var datasetSelection = {
+    L5: false,
+    L7: false,
+    L8: true,
+    L9: true,
+    MO: false,
+    S2: false,
+    S1: false,
+    AL: false,
+    NI: false,
+    DW: false
+};
+
+/******************
+* Possible Values:
+* - NBR
+* - SWIR
+* - NDVI
+*******************/
+var whichReduction = "SWIR"
+
+/******************
+* Possible Values:
+* - nbr
+* - swir
+* - ndvi
+*******************/
+var bandName = 'swir'
+
+var dayStepSize = 4;
+
+var verbose = false; // in general, this should be left alone, and be set to false for most runs except when debugging.
+
+/////////////////////////////////////////
+// end items across sensors
+/////////////////////////////////////////
+
+
+var expectationCollectionParameters = {
+
+    whichReduction: whichReduction,
+
+    bandName_reduction: bandName,
+
+    defaultStudyArea: defaultStudyArea,
+
+    dayStepSize: dayStepSize,
+
+    datasetSelection: datasetSelection,
+
+    verbose: verbose,
+
+    /****** Landsat 5 dictionary ******/
+
+    L5dictionary: {
+      yearsList: [2021],
+      firstDOY: 1,
+      lastDOY: 90,
+
+      CloudCoverThreshold: 45
+    },
+
+    /****** Landsat 7 dictionary ******/
+
+    L7dictionary: {
+      yearsList: [2021],
+      firstDOY: 1,
+      lastDOY: 90,
+
+      CloudCoverThreshold: 47
+    },
+
+    /****** Landsat 8 dictionary ******/
+
+    L8dictionary: {
+      yearsList: [2021, 2022],
+      firstDOY: 150,
+      lastDOY: 250,
+
+      CloudCoverThreshold: 20
+    },
+
+    /****** Landsat 9 dictionary ******/
+
+    L9dictionary: {
+      yearsList: [2021, 2022],
+      firstDOY: 150,
+      lastDOY: 250,
+
+      CloudCoverThreshold: 20
+    },
+
+
+    /*******  Modis dictionary *******/
+
+    MOdictionary: {
+      yearsList: [1950],
+      firstDOY: 150,
+      lastDOY: 250,
+
+      CloudCoverThreshold: 40
+    },
+
+    /****** Sentinel 2 dictionary *****/
+
+    S2dictionary: {
+      yearsList: [2021],
+      firstDOY: 1,
+      lastDOY: 365,
+
+      CloudCoverThreshold: 70,
+
+
+  s2cloudless: {                 //https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless
+        CloudCoverThreshold: 70,   // Maximum image cloud cover percent allowed in image collection
+        cld_prb_thresh: 50,        // Cloud probability (%); values greater than are considered cloud
+        nir_drk_thresh: 0.15,      // Near-infrared reflectance; values less than are considered potential cloud shadow
+        cld_prj_dist: 3,           // Maximum distance (km) to search for cloud shadows from cloud edges
+        Buffer: 50,                // Distance (m) to dilate the edge of cloud-identified objects
+        AOI: defaultStudyArea
+      },
+
+    },
+
+    /****** Sentinel 1 dictionary *****/
+
+    S1dictionary: {
+      SARValueToTrack: "HV", // HH, HV, VH or VV
+      isRadar: true,
+      yearsList: [2021],
+      firstDOY: 270,
+      lastDOY: 360,
+    }
+
+}
+
+var targetCollectionParameters = {
+
+    whichReduction: whichReduction,
+
+    defaultStudyArea: defaultStudyArea,
+
+    dayStepSize: dayStepSize,
+
+    bandName_reduction: bandName,
+
+    datasetSelection: datasetSelection,
+
+    verbose: verbose,
+
+    /****** Landsat 5 dictionary ******/
+
+    L5dictionary: {
+      yearsList: [2022],
+      firstDOY: 115,
+      lastDOY: 165,
+
+      CloudCoverThreshold: 15
+    },
+
+    /****** Landsat 7 dictionary ******/
+
+    L7dictionary: {
+      yearsList: [2022],
+      firstDOY: 117,
+      lastDOY: 167,
+
+      CloudCoverThreshold: 17
+    },
+
+    /****** Landsat 8 dictionary ******/
+
+    L8dictionary: {
+      yearsList: [2022, 2023],
+      firstDOY: 150,
+      lastDOY: 250,
+
+      CloudCoverThreshold: 20
+    },
+
+    /****** Landsat 9 dictionary ******/
+
+    L9dictionary: {
+      yearsList: [2022, 2023],
+      firstDOY: 150,
+      lastDOY: 250,
+
+      CloudCoverThreshold: 20
+    },
+
+    /*******  Modis dictionary *******/
+
+    MOdictionary: {
+      yearsList: [2022],
+      firstDOY: 110,
+      lastDOY: 210,
+
+      CloudCoverThreshold: 10
+    },
+
+    /****** Sentinel dictionary *****/
+
+    S2dictionary: {
+      yearsList: [2022],
+      firstDOY: 1,
+      lastDOY: 365,
+
+      CloudCoverThreshold: 70,
+
+    s2cloudless: {                 //https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless
+        CloudCoverThreshold: 70,   // Maximum image cloud cover percent allowed in image collection
+        cld_prb_thresh: 50,        // Cloud probability (%); values greater than are considered cloud
+        nir_drk_thresh: 0.15,      // Near-infrared reflectance; values less than are considered potential cloud shadow
+        cld_prj_dist: 3,           // Maximum distance (km) to search for cloud shadows from cloud edges
+        Buffer: 50,                // Distance (m) to dilate the edge of cloud-identified objects
+        AOI: defaultStudyArea
+
+      },
+
+    },
+
+    /****** Sentinel 1 dictionary *****/
+
+    S1dictionary: {
+      SARValueToTrack: "HV", // HH, HV, VH or VV
+      isRadar: true,
+      yearsList: [2023],
+      firstDOY: 1,
+      lastDOY: 365,
+    }
+}
+
+
+// In general, items below this line should not be changed by the user
+var var_args_input = {
+
+  whichReduction: whichReduction,
+
+  bandName_reduction: bandName,
+
+  bandNameToFit: bandName,
+
+  plottingMeans: true ,
+
+  harmonicConstant: false,
+
+  binCuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2],
+
+  modalityDictionary: {
+    bimodal: false,
+    constant: true,
+    linear: false,
+    trimodal: false,
+    unimodal: true
+  },
+
+  defaultStudyArea: defaultStudyArea,
+
+  verbose: verbose,
+
+  centeringZoom: 16,
+
+  /**** Expectation/Target Collection Parameters ******/
+
+  expectationCollectionParameters: expectationCollectionParameters,
+
+  sensitivityDictionary: {
+    ZScoreNumeratorFactor: 1,
+    ZScoreDenominatorFactor: 0.05
+  },
+
+  targetCollectionParameters: targetCollectionParameters,
+
+}
+
+exports.inputParameters = var_args_input

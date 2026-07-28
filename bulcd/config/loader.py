@@ -3,7 +3,8 @@
 A misconfigured run is expensive — it kicks off a real Earth Engine
 export — so this validates explicitly and fails loudly on anything
 missing or malformed rather than silently falling back to a default
-that might not be what the user intended.
+that might not be what the user intended. See bulcd/config/schema.py's
+module docstring for where each field comes from in the legacy schema.
 """
 
 from __future__ import annotations
@@ -16,19 +17,21 @@ import yaml
 from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
+    EvidenceConfig,
     ExportConfig,
+    ModalityConfig,
     ReductionConfig,
-    SensorConfig,
+    S2CloudMaskConfig,
+    SensitivityConfig,
+    SensorEvidenceConfig,
     StudyAreaConfig,
-    TemporalConfig,
 )
 
-_VALID_SENSORS = {
-    "landsat5", "landsat7", "landsat8", "landsat9",
-    "sentinel1", "sentinel2", "modis",
-}
+_VALID_SENSOR_CODES = {"L5", "L7", "L8", "L9", "MO", "S2", "S1", "AL", "NI", "DW"}
+_SAR_SENSOR_CODES = {"S1", "AL"}
 _VALID_REDUCTION_BANDS = {"nbr", "swir", "ndvi"}
 _VALID_EXPORT_DESTINATIONS = {"asset", "drive"}
+_VALID_SAR_POLARIZATIONS = {"HH", "HV", "VH", "VV"}
 
 
 class ConfigError(ValueError):
@@ -50,11 +53,18 @@ def load_config(path: str | Path) -> BULCDConfig:
 
     return BULCDConfig(
         study_area=_build_study_area(_require_section(raw, "study_area", path)),
-        sensors=_build_sensors(_require_section(raw, "sensors", path)),
-        temporal=_build_temporal(_require_section(raw, "temporal", path)),
+        evidence=_build_evidence(_require_section(raw, "evidence", path)),
         schema_version=str(raw.get("schema_version", "1")),
         reduction=_build_reduction(raw.get("reduction", {})),
-        bulc_params=_build_bulc_params(raw.get("bulc_params", {})),
+        modality=_build_modality(raw.get("modality", {})),
+        sensitivity=_build_sensitivity(raw.get("sensitivity", {})),
+        bin_cuts=raw.get(
+            "bin_cuts", [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+        ),
+        harmonic_constant=raw.get("harmonic_constant", False),
+        plotting_means=raw.get("plotting_means", False),
+        verbose=raw.get("verbose", False),
+        bulc_advanced_params=BULCAdvancedParams(raw=raw.get("bulc_advanced_params", {})),
         export=_build_export(raw.get("export", {})),
     )
 
@@ -74,48 +84,82 @@ def _require_field(section: dict[str, Any], key: str, section_name: str) -> Any:
 
 
 def _build_study_area(section: dict[str, Any]) -> StudyAreaConfig:
+    aoi_asset = section.get("aoi_asset")
+    aoi_coordinates = section.get("aoi_coordinates")
+    if bool(aoi_asset) == bool(aoi_coordinates):
+        raise ConfigError(
+            "study_area: exactly one of 'aoi_asset' or 'aoi_coordinates' must be set"
+        )
     return StudyAreaConfig(
-        aoi_asset=_require_field(section, "aoi_asset", "study_area"),
+        aoi_asset=aoi_asset,
+        aoi_coordinates=aoi_coordinates,
         crs=section.get("crs", "EPSG:4326"),
         scale=section.get("scale", 30),
         forest_mask_asset=section.get("forest_mask_asset"),
     )
 
 
-def _build_sensors(section: Any) -> list[SensorConfig]:
-    if not isinstance(section, list) or not section:
-        raise ConfigError("'sensors' must be a non-empty list")
+def _build_evidence(section: dict[str, Any]) -> EvidenceConfig:
+    sensors_section = section.get("sensors")
+    if not isinstance(sensors_section, dict) or not sensors_section:
+        raise ConfigError("evidence.sensors must be a non-empty mapping of sensor code -> config")
 
-    sensors = []
-    for i, entry in enumerate(section):
-        name = _require_field(entry, "name", f"sensors[{i}]")
-        if name not in _VALID_SENSORS:
+    sensors: dict[str, SensorEvidenceConfig] = {}
+    for code, entry in sensors_section.items():
+        if code not in _VALID_SENSOR_CODES:
             raise ConfigError(
-                f"sensors[{i}].name '{name}' is not one of {sorted(_VALID_SENSORS)}"
+                f"evidence.sensors key '{code}' is not one of {sorted(_VALID_SENSOR_CODES)}"
             )
-        sensors.append(
-            SensorConfig(
-                name=name,
-                cloud_cover_threshold=entry.get("cloud_cover_threshold", 20.0),
-                enabled=entry.get("enabled", True),
-            )
-        )
-    return sensors
+        sensors[code] = _build_sensor_evidence(entry, code)
+
+    if not any(s.enabled for s in sensors.values()):
+        raise ConfigError("evidence.sensors: at least one sensor must have enabled: true")
+
+    return EvidenceConfig(
+        day_step_size=section.get("day_step_size", 4),
+        sensors=sensors,
+    )
 
 
-def _build_temporal(section: dict[str, Any]) -> TemporalConfig:
-    start_date = _require_field(section, "start_date", "temporal")
-    end_date = _require_field(section, "end_date", "temporal")
-    doy_window = tuple(section.get("doy_window", (1, 365)))
-    if len(doy_window) != 2:
-        raise ConfigError(
-            "temporal.doy_window must have exactly 2 values [first_doy, last_doy]"
+def _build_sensor_evidence(entry: dict[str, Any], code: str) -> SensorEvidenceConfig:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"evidence.sensors.{code} must be a mapping, got {type(entry).__name__}")
+
+    sar_polarization = entry.get("sar_polarization")
+    if sar_polarization is not None:
+        if code not in _SAR_SENSOR_CODES:
+            raise ConfigError(
+                f"evidence.sensors.{code}.sar_polarization is only valid for {sorted(_SAR_SENSOR_CODES)}"
+            )
+        if sar_polarization not in _VALID_SAR_POLARIZATIONS:
+            raise ConfigError(
+                f"evidence.sensors.{code}.sar_polarization '{sar_polarization}' is not one of "
+                f"{sorted(_VALID_SAR_POLARIZATIONS)}"
+            )
+
+    s2_cloud_mask_section = entry.get("s2_cloud_mask")
+    if s2_cloud_mask_section is not None and code != "S2":
+        raise ConfigError(f"evidence.sensors.{code}.s2_cloud_mask is only valid for S2")
+    s2_cloud_mask = (
+        S2CloudMaskConfig(
+            cld_prb_thresh=s2_cloud_mask_section.get("cld_prb_thresh", 50.0),
+            nir_drk_thresh=s2_cloud_mask_section.get("nir_drk_thresh", 0.15),
+            cld_prj_dist=s2_cloud_mask_section.get("cld_prj_dist", 3.0),
+            buffer=s2_cloud_mask_section.get("buffer", 50.0),
         )
-    return TemporalConfig(
-        start_date=start_date,
-        end_date=end_date,
-        doy_window=doy_window,
-        day_step_size=section.get("day_step_size"),
+        if s2_cloud_mask_section is not None
+        else None
+    )
+
+    return SensorEvidenceConfig(
+        enabled=entry.get("enabled", False),
+        first_year=entry.get("first_year"),
+        last_year=entry.get("last_year"),
+        first_doy=entry.get("first_doy", 1),
+        last_doy=entry.get("last_doy", 365),
+        cloud_cover_threshold=entry.get("cloud_cover_threshold", 20.0),
+        sar_polarization=sar_polarization,
+        s2_cloud_mask=s2_cloud_mask,
     )
 
 
@@ -128,16 +172,26 @@ def _build_reduction(section: dict[str, Any]) -> ReductionConfig:
     return ReductionConfig(band=band)
 
 
-def _build_bulc_params(section: dict[str, Any]) -> BULCAdvancedParams:
-    defaults = BULCAdvancedParams()
-    return BULCAdvancedParams(
-        bin_cuts=section.get("bin_cuts", defaults.bin_cuts),
-        modality_dictionary=section.get("modality_dictionary", defaults.modality_dictionary),
-        sensitivity_dictionary=section.get(
-            "sensitivity_dictionary", defaults.sensitivity_dictionary
+def _build_modality(section: dict[str, Any]) -> ModalityConfig:
+    defaults = ModalityConfig()
+    return ModalityConfig(
+        constant=section.get("constant", defaults.constant),
+        linear=section.get("linear", defaults.linear),
+        unimodal=section.get("unimodal", defaults.unimodal),
+        bimodal=section.get("bimodal", defaults.bimodal),
+        trimodal=section.get("trimodal", defaults.trimodal),
+    )
+
+
+def _build_sensitivity(section: dict[str, Any]) -> SensitivityConfig:
+    defaults = SensitivityConfig()
+    return SensitivityConfig(
+        z_score_numerator_factor=section.get(
+            "z_score_numerator_factor", defaults.z_score_numerator_factor
         ),
-        plotting_means=section.get("plotting_means", defaults.plotting_means),
-        verbose=section.get("verbose", defaults.verbose),
+        z_score_denominator_factor=section.get(
+            "z_score_denominator_factor", defaults.z_score_denominator_factor
+        ),
     )
 
 

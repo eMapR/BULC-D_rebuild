@@ -1,41 +1,82 @@
 # Example BULC-D parameter file.
 #
-# Analogous to the legacy EnsembleParameterConfigFile GEE asset that
-# mckenzeBULCD.rtf points its CFG variable at — but a real, version-
-# controlled file instead of a GEE asset, loaded via
-# bulcd.config.loader.load_config().
+# Real-world counterpart: legacy/BULCD-InputParameters-v5.txt (a
+# BULCD-Caller-Parameters/BULCD-InputParameters-v5 file from the
+# `alemlakes/r-2909-BULC-Releases` GEE repo), adapted to one continuous
+# per-sensor evidence window instead of the legacy's separate
+# expectation-period/target-period dictionaries.
+#
+# Loaded via bulcd.config.loader.load_config().
 
 schema_version: "1"
 
 study_area:
-  aoi_asset: "users/example-user/example-project:sites/example_site"
+  # Exactly one of aoi_asset / aoi_coordinates must be set.
+  aoi_coordinates: [[-126.04, 49.59], [-126.04, 40.76], [-118.93, 40.76], [-118.93, 49.59]]
   crs: "EPSG:4326"
   scale: 30
   forest_mask_asset: null
 
-sensors:
-  - name: landsat8
-    cloud_cover_threshold: 20
-  - name: landsat9
-    cloud_cover_threshold: 20
-  - name: sentinel2
-    cloud_cover_threshold: 20
-
-temporal:
-  # Continuous full-archive evidence window — replaces the legacy
-  # expectation-period/target-period split.
-  start_date: "1984-01-01"
-  end_date: "2026-07-28"
-  doy_window: [152, 273]  # roughly June 1 - Sep 30, leaf-on season
+evidence:
+  day_step_size: 4
+  sensors:
+    L8:
+      enabled: true
+      first_year: 2013  # Landsat 8 launch year
+      last_year: null   # null = through most recent available
+      first_doy: 150
+      last_doy: 250
+      cloud_cover_threshold: 20
+    L9:
+      enabled: true
+      first_year: 2021  # Landsat 9 launch year
+      last_year: null
+      first_doy: 150
+      last_doy: 250
+      cloud_cover_threshold: 20
+    S2:
+      enabled: false
+      first_year: 2018
+      last_year: null
+      first_doy: 1
+      last_doy: 365
+      cloud_cover_threshold: 70
+      s2_cloud_mask:
+        cld_prb_thresh: 50
+        nir_drk_thresh: 0.15
+        cld_prj_dist: 3
+        buffer: 50
+    S1:
+      enabled: false
+      first_year: 2015
+      last_year: null
+      first_doy: 270
+      last_doy: 360
+      sar_polarization: HV
 
 reduction:
-  band: nbr
+  band: swir
 
-bulc_params:
-  # Advanced/rarely-touched tier. Omit entirely to use engine defaults;
-  # only override the fields you actually mean to change.
-  bin_cuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
-  verbose: false
+modality:
+  # Legacy example has both constant and unimodal true (not mutually
+  # exclusive) - read as candidate shapes, not a single selector.
+  constant: true
+  unimodal: true
+  linear: false
+  bimodal: false
+  trimodal: false
+
+sensitivity:
+  z_score_numerator_factor: 1
+  z_score_denominator_factor: 0.05
+
+bin_cuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+harmonic_constant: false
+plotting_means: true
+verbose: false
+
+# Placeholder until BULCD-AdvancedParameters-v5's contents are known.
+bulc_advanced_params: {}
 
 export:
   destination: asset
