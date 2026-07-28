@@ -211,9 +211,22 @@ not a move off Earth Engine.
   Engine export runs against the wrong AOI/dates. 12 passing tests in
   `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
   example.
-- No engine/algorithm code yet (`inputs.py`, `bulc.py`, `engine.py`,
-  `interpret.py`, `export.py`, `cli.py`, and the `sensors/` submodule
-  from the earlier package-structure draft are all still unwritten) —
-  see "Legacy source repos and what's still missing" above for why
-  `inputs.py`/`bulc.py`/`engine.py`/`interpret.py` can only be partially
-  written until we have more legacy source.
+- `bulcd/inputs.py` — PARTIAL. Real, working: `resolve_study_area()` and
+  `assemble_evidence_collection()` (harmonized Landsat 5/7/8/9
+  Collection 2 Level 2 SR, QA_PIXEL cloud mask, NBR/SWIR/NDVI reduction,
+  per-sensor continuous year range + seasonal DOY filter via
+  `ee.Filter.calendarRange`, merged + `.toFloat()`-cast + time-sorted).
+  Sentinel-1/2, MODIS, ALOS/NICFI/Dynamic World raise
+  `NotImplementedError` if enabled. `organize_inputs()` (the
+  expectation-regression/R2/residuals/z-score step) is a full
+  `NotImplementedError` stub — needs the missing `organizeBULCD_Inputs`
+  source, see above. NOT YET VALIDATED against real Earth Engine: needs
+  `ee.Initialize(project=...)` with a real GEE Cloud project, which we
+  haven't picked for this repo yet (unlike the sibling GeoTimeSeries
+  project's `eastern-cascades-bugnet`) — 4 passing pure-Python tests in
+  `tests/test_inputs.py` cover only the date-math helper and the stub's
+  contract.
+- `bulc.py`, `engine.py`, `interpret.py`, `export.py`, `cli.py`, and the
+  `sensors/` submodule from the earlier package-structure draft are
+  still unwritten — see "Legacy source repos and what's still missing"
+  above for why they can currently only be partial stubs at best.
