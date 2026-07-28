@@ -1,0 +1,44 @@
+# Example BULC-D parameter file.
+#
+# Analogous to the legacy EnsembleParameterConfigFile GEE asset that
+# mckenzeBULCD.rtf points its CFG variable at — but a real, version-
+# controlled file instead of a GEE asset, loaded via
+# bulcd.config.loader.load_config().
+
+schema_version: "1"
+
+study_area:
+  aoi_asset: "users/example-user/example-project:sites/example_site"
+  crs: "EPSG:4326"
+  scale: 30
+  forest_mask_asset: null
+
+sensors:
+  - name: landsat8
+    cloud_cover_threshold: 20
+  - name: landsat9
+    cloud_cover_threshold: 20
+  - name: sentinel2
+    cloud_cover_threshold: 20
+
+temporal:
+  # Continuous full-archive evidence window — replaces the legacy
+  # expectation-period/target-period split.
+  start_date: "1984-01-01"
+  end_date: "2026-07-28"
+  doy_window: [152, 273]  # roughly June 1 - Sep 30, leaf-on season
+
+reduction:
+  band: nbr
+
+bulc_params:
+  # Advanced/rarely-touched tier. Omit entirely to use engine defaults;
+  # only override the fields you actually mean to change.
+  bin_cuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+  verbose: false
+
+export:
+  destination: asset
+  asset_folder: "users/example-user/example-project:bulcd_outputs/"
+  max_pixels: 1000000000000
+  description_prefix: bulcd

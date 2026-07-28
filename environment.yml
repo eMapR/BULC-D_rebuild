@@ -1,0 +1,10 @@
+name: bulcd
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pyyaml
+  - pytest
+  - pip
+  - pip:
+      - earthengine-api

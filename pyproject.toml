@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bulcd"
+version = "0.1.0"
+description = "BULC-D forest-change-detection algorithm (Python + earthengine-api rebuild)"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6",
+    "earthengine-api",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["bulcd*"]

@@ -91,3 +91,28 @@ algorithm still executes server-side on Earth Engine (it's Python code
 building an EE computation graph, same as `gee_export/export_timeseries.py`
 in the sibling GeoTimeSeries project) — this is a client-language choice,
 not a move off Earth Engine.
+
+## Environment
+
+- Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
+  pip-installed `earthengine-api`).
+- Package is pip-installed editable into that env (`pip install -e .`,
+  via `pyproject.toml`) so `bulcd.*` imports resolve without PYTHONPATH
+  hacks.
+- Run tests: `conda run -n bulcd pytest tests/ -v`.
+
+## Current code state
+
+- `bulcd/config/schema.py` — typed config dataclasses (`BULCDConfig` and
+  its sub-configs: study area, sensors, temporal window, reduction band,
+  advanced BULC tuning, export settings).
+- `bulcd/config/loader.py` — `load_config(path) -> BULCDConfig`. Parses
+  YAML, validates required fields and enum-like values section by
+  section, raises `ConfigError` with a specific message rather than
+  silently defaulting — a bad config here means a real, billed Earth
+  Engine export runs against the wrong AOI/dates. 8 passing tests in
+  `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
+  example.
+- No engine/algorithm code yet (`inputs.py`, `bulc.py`, `engine.py`,
+  `interpret.py`, `export.py`, `cli.py`, and the `sensors/` submodule
+  from the earlier package-structure draft are all still unwritten).
