@@ -183,6 +183,15 @@ building an EE computation graph, same as `gee_export/export_timeseries.py`
 in the sibling GeoTimeSeries project) — this is a client-language choice,
 not a move off Earth Engine.
 
+## Open question: GEE Cloud project
+
+Not yet decided which GEE Cloud project `bulcd` should call
+`ee.Initialize(project=...)` with (the sibling GeoTimeSeries project uses
+`eastern-cascades-bugnet`, explicitly passed rather than auto-detected —
+same convention should apply here, but confirm the project itself before
+assuming reuse). Blocks any real testing of `bulcd/inputs.py` against
+live Earth Engine.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
