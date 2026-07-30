@@ -17,17 +17,21 @@ STUBBED, NOT IMPLEMENTED:
   - Sentinel-1/2, MODIS, ALOS, NICFI, Dynamic World collection assembly
     (`assemble_evidence_collection` raises NotImplementedError if one
     of these is enabled in config).
+
+PARTIAL, IMPLEMENTED AGAINST A RECONSTRUCTION, NOT THE REAL SOURCE:
   - `organize_inputs()` — the legacy `afn_organizeBULCD_Inputs`
-    equivalent: fitting the expectation-period regression (shape
-    selected by config.modality), computing R2/residuals, and scoring
-    the continuous evidence stream into z-scores (per
-    config.sensitivity). This is the actual statistical core of
-    BULC-D. Its real implementation lives in a GEE module
-    (`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`, repo
-    `alemlakes/r-2903-Dev`) we don't have source for. Reconstructing it
-    from field names would risk silently deviating from "preserve the
-    Bayesian updating core" (CLAUDE.md modernization goals) — so it's
-    an explicit stub, not a guess.
+    equivalent: fits the expectation-period harmonic regression (shape
+    selected by config.modality) against a global baseline window
+    (config.evidence.expectation_first_year/last_year), then scores the
+    ENTIRE continuous evidence stream into z-scores (per
+    config.sensitivity) against that fit. Its real implementation lives
+    in a GEE module (`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`,
+    repo `alemlakes/r-2903-Dev`) we still don't have source for -
+    implemented here against a credible published reconstruction
+    instead (Cardille & Fortin 2016; Willis 2022 - see CLAUDE.md
+    "Reference papers"). Every formula choice not explicitly given in
+    those papers (modality-priority resolution, the z-score epsilon) is
+    flagged inline as a documented assumption, not a silent guess.
 
 Assumes `ee.Initialize(...)` has already been called by the caller —
 this module never calls it itself, so it has no opinion about which
@@ -37,10 +41,18 @@ GEE Cloud project you're billed against.
 from __future__ import annotations
 
 import datetime
+import math
+from dataclasses import dataclass
 
 import ee
 
-from bulcd.config.schema import BULCDConfig, SensorEvidenceConfig, StudyAreaConfig
+from bulcd.config.schema import (
+    BULCDConfig,
+    ModalityConfig,
+    SensitivityConfig,
+    SensorEvidenceConfig,
+    StudyAreaConfig,
+)
 
 # Landsat Collection 2 Level 2 surface reflectance: common band name -> native
 # band. TM/ETM+ (L5/L7) and OLI (L8/L9) number the same spectral regions
@@ -183,27 +195,218 @@ def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
     return merged.map(lambda img: img.toFloat()).sort("system:time_start")
 
 
-def organize_inputs(config: BULCDConfig):
-    """Placeholder for the legacy `afn_organizeBULCD_Inputs` equivalent.
+@dataclass
+class ExpectationFit:
+    """Per-pixel harmonic regression fit to the expectation-period baseline.
 
-    NOT IMPLEMENTED. Once we have the organizeBULCD_Inputs module source
-    (see module docstring), this should return an object exposing
-    (legacy field names in parens; some generalized from a single image
-    to a continuous ImageCollection, which is the modernization's
-    central algorithmic change):
-
-      - evidence_collection: ee.ImageCollection
-        (DONE - see assemble_evidence_collection() above)
-      - expectation_r2, expectation_residuals: ee.Image
-        (legacy theExpectationR2 / theExpectationResiduals)
-      - expectation_summary_value, expectation_sd, expectation_mean: ee.Image
-        (legacy expectationPeriodSummaryValue / SD / Mean)
-      - lof_zscore: ee.ImageCollection, one z-score image per evidence
-        timestep (legacy targetLOFAsZScore - generalized here from a
-        single target-period image to a continuous stream)
+    `coefficients` is a multi-band image, one band per entry in
+    `regressor_names`, in the same order (see `_select_modality_regressors`).
     """
-    raise NotImplementedError(
-        "organize_inputs() requires the actual organizeBULCD_Inputs regression/"
-        "z-score logic, which we don't have source for yet. "
-        "assemble_evidence_collection() is implemented and usable on its own."
+
+    coefficients: ee.Image
+    regressor_names: list[str]
+    r2: ee.Image
+    residual_stddev: ee.Image
+
+
+@dataclass
+class OrganizedInputs:
+    """Return type of organize_inputs() - the legacy `bulcD_input` object,
+    generalized from a single expectation/target-period comparison to a
+    continuous evidence stream (see module docstring)."""
+
+    evidence_collection: ee.ImageCollection
+    expectation_r2: ee.Image
+    expectation_residual_stddev: ee.Image
+    # One 'fitted' band added per timestep across the FULL evidence
+    # collection (not just the baseline window) - legacy's expectCollectionFit,
+    # generalized so the same fitted curve can be inspected/plotted at any
+    # point in the continuous stream, not just within the expectation period.
+    expectation_fitted_collection: ee.ImageCollection
+    # One z-score image per evidence timestep (legacy targetLOFAsZScore,
+    # generalized from a single target-period image to a continuous stream -
+    # the modernization's central algorithmic change).
+    lof_zscore: ee.ImageCollection
+
+
+def _select_modality_regressors(modality: ModalityConfig) -> list[str]:
+    """Resolves ModalityConfig's (possibly multiple) true flags to one
+    concrete list of harmonic regressor band names (see _add_harmonic_terms).
+
+    ASSUMPTION pending real organizeBULCD_Inputs source confirmation: the
+    one real legacy example (BULCD-InputParameters-v5) sets both `constant`
+    and `unimodal` true simultaneously, and ModalityConfig's own docstring
+    already flags this as unresolved. Here: richest enabled shape wins,
+    in order trimodal > bimodal > unimodal > linear > constant.
+    """
+    if modality.trimodal:
+        return ["constant", "sin", "cos2", "sin2", "cos3", "sin3"]
+    if modality.bimodal:
+        return ["constant", "sin", "cos2", "sin2"]
+    if modality.unimodal:
+        # Willis (2022) eq. 6's simplified 2-term fit - constant + one sine
+        # term outperformed the full 4-term harmonic (constant + linear +
+        # cos + sin) in their testing, so that's what's implemented here
+        # rather than the full eq. 4.
+        return ["constant", "sin"]
+    if modality.linear:
+        return ["constant", "t"]
+    # Fallback regardless of modality.constant's own value - a regression
+    # needs at least an intercept term, so "no seasonal shape selected"
+    # and "constant explicitly selected" resolve to the same regressor set.
+    return ["constant"]
+
+
+def _add_harmonic_terms(image: ee.Image) -> ee.Image:
+    """Adds constant/time/harmonic regressor bands to a single evidence image.
+
+    Uses continuous fractional years since an arbitrary epoch (not
+    day-of-year mod 365, which Willis (2022) eq. 4/5/6 use) as the time
+    axis `t`, so `sin(2*pi*t)` still completes exactly one cycle per year
+    but stays continuous across an expectation window spanning multiple
+    years - a generalization of the thesis's single-year formulation,
+    needed here because our expectation window is a configurable
+    multi-year range rather than the legacy's fixed one-year period. This
+    is the standard Earth Engine harmonic-regression idiom (Google's own
+    time-series-modeling tutorial), not a novel formula.
+    """
+    epoch = ee.Date("1970-01-01")
+    years_since_epoch = image.date().difference(epoch, "year")
+    two_pi_t = ee.Image.constant(years_since_epoch).multiply(2 * math.pi).toFloat()
+    return (
+        image.addBands(ee.Image.constant(1).rename("constant").toFloat())
+        .addBands(ee.Image.constant(years_since_epoch).rename("t").toFloat())
+        .addBands(two_pi_t.sin().rename("sin"))
+        .addBands(two_pi_t.multiply(2).cos().rename("cos2"))
+        .addBands(two_pi_t.multiply(2).sin().rename("sin2"))
+        .addBands(two_pi_t.multiply(3).cos().rename("cos3"))
+        .addBands(two_pi_t.multiply(3).sin().rename("sin3"))
+    )
+
+
+def _add_fitted_band(
+    image: ee.Image, coefficients: ee.Image, regressor_names: list[str]
+) -> ee.Image:
+    """Adds a 'fitted' band = sum(coefficient_i * regressor_i) to an image
+    that already carries the harmonic regressor bands (_add_harmonic_terms).
+    Works at ANY timestep, not just within the expectation window - this is
+    what lets the same fit score the full continuous evidence stream."""
+    fitted = (
+        image.select(regressor_names)
+        .multiply(coefficients)
+        .reduce(ee.Reducer.sum())
+        .rename("fitted")
+    )
+    return image.addBands(fitted)
+
+
+def _fit_expectation_model(
+    expectation_collection: ee.ImageCollection, modality: ModalityConfig, band: str
+) -> ExpectationFit:
+    """Fits the per-pixel harmonic expectation model (Willis 2022 eq. 4/6)
+    against the baseline window only, and computes R2/residual stddev
+    against that same baseline - the standard GEE harmonic-regression
+    reduce-then-arrayFlatten idiom."""
+    regressor_names = _select_modality_regressors(modality)
+    harmonic_expectation = expectation_collection.map(_add_harmonic_terms)
+
+    regression_input = harmonic_expectation.select(regressor_names + [band])
+    regression = regression_input.reduce(
+        ee.Reducer.linearRegression(numX=len(regressor_names), numY=1)
+    )
+    coefficients = (
+        regression.select("coefficients").arrayProject([0]).arrayFlatten([regressor_names])
+    )
+
+    fitted_expectation = harmonic_expectation.map(
+        lambda img: _add_fitted_band(img, coefficients, regressor_names)
+    )
+
+    def _squared_residual(image: ee.Image) -> ee.Image:
+        return (
+            image.select(band)
+            .subtract(image.select("fitted"))
+            .pow(2)
+            .rename("squared_residual")
+        )
+
+    ss_res = fitted_expectation.map(_squared_residual).reduce(ee.Reducer.sum()).rename("ss_res")
+    n = expectation_collection.size()
+    residual_stddev = (
+        ss_res.divide(n.subtract(len(regressor_names))).sqrt().rename("residual_stddev")
+    )
+
+    observed_mean = expectation_collection.select(band).reduce(ee.Reducer.mean())
+    ss_tot = (
+        expectation_collection.select(band)
+        .map(lambda img: img.subtract(observed_mean).pow(2).rename("squared_deviation"))
+        .reduce(ee.Reducer.sum())
+        .rename("ss_tot")
+    )
+    r2 = ee.Image(1).subtract(ss_res.divide(ss_tot)).rename("r2")
+
+    return ExpectationFit(
+        coefficients=coefficients,
+        regressor_names=regressor_names,
+        r2=r2,
+        residual_stddev=residual_stddev,
+    )
+
+
+def _zscore_image(
+    observed: ee.Image, fitted: ee.Image, residual_stddev: ee.Image, sensitivity: SensitivityConfig
+) -> ee.Image:
+    """(observed - fitted) / residual_stddev, scaled per config.sensitivity.
+
+    ASSUMPTION (exact formula lives in the still-missing organizeBULCD_Inputus
+    source, not given explicitly in either paper): z_score_denominator_factor
+    (default 0.05) is read as a stabilizing epsilon added to residual_stddev,
+    preventing divide-by-zero/blowup in near-constant pixels (e.g. water),
+    not an independent multiplicative scale - flagged the same way the
+    SWIR-reduction assumption already is elsewhere in this file.
+    """
+    numerator = observed.subtract(fitted).multiply(sensitivity.z_score_numerator_factor)
+    denominator = residual_stddev.add(sensitivity.z_score_denominator_factor)
+    return numerator.divide(denominator).rename("zscore")
+
+
+def organize_inputs(config: BULCDConfig) -> OrganizedInputs:
+    """The legacy `afn_organizeBULCD_Inputs` equivalent (see module docstring
+    for what's implemented against a reconstruction vs. the real source)."""
+    if config.evidence.expectation_first_year is None or config.evidence.expectation_last_year is None:
+        raise ValueError(
+            "organize_inputs() requires evidence.expectation_first_year and "
+            "expectation_last_year to be set - the baseline window the "
+            "expectation model is fit against. See CLAUDE.md 'Design decision: "
+            "the expectation baseline window'."
+        )
+
+    band = config.reduction.band
+    evidence_collection = assemble_evidence_collection(config)
+
+    expectation_start = f"{config.evidence.expectation_first_year}-01-01"
+    expectation_end = f"{config.evidence.expectation_last_year}-01-01"
+    expectation_collection = evidence_collection.filterDate(expectation_start, expectation_end)
+
+    fit = _fit_expectation_model(expectation_collection, config.modality, band)
+
+    harmonic_full = evidence_collection.map(_add_harmonic_terms)
+    expectation_fitted_collection = harmonic_full.map(
+        lambda img: _add_fitted_band(img, fit.coefficients, fit.regressor_names)
+    )
+
+    def _add_zscore(image: ee.Image) -> ee.Image:
+        z = _zscore_image(
+            image.select(band), image.select("fitted"), fit.residual_stddev, config.sensitivity
+        )
+        return image.addBands(z)
+
+    lof_zscore = expectation_fitted_collection.map(_add_zscore).select("zscore")
+
+    return OrganizedInputs(
+        evidence_collection=evidence_collection,
+        expectation_r2=fit.r2,
+        expectation_residual_stddev=fit.residual_stddev,
+        expectation_fitted_collection=expectation_fitted_collection,
+        lof_zscore=lof_zscore,
     )

@@ -33,14 +33,19 @@ Provenance (see legacy/ for full source):
 
 Known gap: `BULCD-AdvancedParameters-v5` (transition matrices / more
 detailed intermediate outputs, per the caller script's own comment)
-has NOT been provided yet — `BULCAdvancedParams` below is a placeholder
-until we have it.
+has NOT been provided yet — `BULCAdvancedParams.raw` is a placeholder
+for whatever else it turns out to hold. Its two most important known
+fields (`custom_transition_matrix`, `dampening_factor`) are now typed
+based on Cardille & Fortin (2016) and Willis (2022) — see CLAUDE.md
+"Reference papers" and the field docstrings below — a credible
+published reconstruction, not the actual source file.
 
 Also known gap: the actual regression-fitting / R2 / residual / z-score
 math lives inside `afn_organizeBULCD_Inputs` (module
 `6002.A2b.3-BULCD-Module-organizeBULCD_Inputs` in `r-2903-Dev`), whose
 source we don't have. This schema only captures the *parameters* that
-feed that function, not its internals.
+feed that function, not its internals — though `bulcd/inputs.py`'s
+`organize_inputs()` now implements a credible reconstruction of it too.
 
 Intentionally dropped from the legacy schema: `centeringZoom` — only
 used for `Map.centerObject()` in the interactive GUI, meaningless for a
@@ -143,6 +148,19 @@ class EvidenceConfig:
     day_step_size: int = 4  # legacy dayStepSize
     sensors: dict[SensorCode, SensorEvidenceConfig] = field(default_factory=dict)
 
+    # The "expectation model still has to exist somewhere" baseline (see
+    # CLAUDE.md "Legacy parameter semantics"). This is a GLOBAL date range
+    # applied to the already-merged, sensor-agnostic evidence stream (see
+    # assemble_evidence_collection() / organize_inputs() in inputs.py) —
+    # not a per-sensor split, because organize_inputs() fits one harmonic
+    # model per pixel over one reduced band, regardless of which sensor(s)
+    # contributed images within this window. A deliberate domain choice
+    # (which real calendar years count as "normal, undisturbed forest"),
+    # not derived from sensor data-availability — loader.py validates it
+    # overlaps at least one enabled sensor's coverage.
+    expectation_first_year: int | None = None
+    expectation_last_year: int | None = None
+
 
 @dataclass
 class ReductionConfig:
@@ -185,14 +203,38 @@ class SensitivityConfig:
 
 @dataclass
 class BULCAdvancedParams:
-    """Placeholder for `BULCD-AdvancedParameters-v5`.
+    """Placeholder for `BULCD-AdvancedParameters-v5`, now partially typed.
 
     Per the caller script's own comment: "transition matrices or more
     detailed outputs" for the underlying BULC (not BULC-D) engine —
     "unlikely to change... could be tweaked by an advanced user." We
-    don't have this file's contents yet, so this is an opaque
-    passthrough dict until we do; do not assume its shape.
+    still don't have this file's actual contents, but the Willis (2022)
+    honours thesis (see CLAUDE.md "Reference papers") gives a credible,
+    concretely-shaped worked example of what it holds for NBR12 — see
+    the two fields below. `raw` remains an opaque passthrough for
+    anything else still unknown; do not assume its shape.
     """
+
+    # 10 bins (z-score "collection bins") x 3 decision classes
+    # ([P(bin | decrease/burn), P(bin | no change), P(bin | increase/
+    # regrowth)]). Hand-tuned likelihood weights, NOT empirical
+    # proportions (confirmed by the thesis: rows/columns need not sum to
+    # 1) - and index-specific (BAI needs an entirely different matrix
+    # than NBR12 per the thesis), so there's no universal default here.
+    # engine.py raises a clear error if this is None at run time, rather
+    # than silently falling back to some arbitrary matrix.
+    custom_transition_matrix: list[list[float]] | None = None
+
+    # Cardille & Fortin (2016) section 4.6's dampening factor `d`:
+    # dampened = d * raw_update_factor + (1 - d) / n_classes. 1.0 = no
+    # dampening (raw update factors used as-is). Default is 0.5 (the
+    # paper's own tested value), NOT 1.0 - a first live-EE run of this
+    # codebase (2026-07-29, see CLAUDE.md "First live-EE verification")
+    # found that d=1.0 produces extreme, likely-uninterpretable
+    # overconfidence after many sequential Events (probabilities at the
+    # edge of float64 precision), exactly the failure mode this factor
+    # exists to prevent.
+    dampening_factor: float = 0.5
 
     raw: dict = field(default_factory=dict)
 

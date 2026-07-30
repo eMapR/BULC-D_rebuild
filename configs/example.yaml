@@ -19,6 +19,15 @@ study_area:
 
 evidence:
   day_step_size: 4
+  # Global baseline window for the expectation-model fit (see CLAUDE.md
+  # "Reference papers" / "Design decision: the expectation baseline
+  # window" in the implementation plan) - a deliberate domain choice of
+  # which calendar years count as "normal, undisturbed forest", not
+  # derived from sensor data availability. Applied to the merged,
+  # sensor-agnostic evidence stream regardless of which sensor(s) below
+  # contributed images in this range.
+  expectation_first_year: 2015
+  expectation_last_year: 2017
   sensors:
     L8:
       enabled: true
@@ -75,8 +84,27 @@ harmonic_constant: false
 plotting_means: true
 verbose: false
 
-# Placeholder until BULCD-AdvancedParameters-v5's contents are known.
-bulc_advanced_params: {}
+# Still a placeholder for BULCD-AdvancedParameters-v5's full, real
+# contents, but the two fields below are now typed - see CLAUDE.md
+# "Reference papers" and bulcd/config/schema.py's BULCAdvancedParams.
+bulc_advanced_params:
+  dampening_factor: 0.5  # paper's own tested value; d=1.0 (no dampening) was found
+                         # to produce extreme overconfidence in a live-EE test run
+  # Willis (2022)'s own worked example for NBR12 (this study's example,
+  # NOT a shipped production default - BAI or other reduction bands need
+  # a differently-shaped matrix; see the thesis's Figure A4/A5). Reduction
+  # band here is "swir" above, not NBR12, so replace this before a real run.
+  custom_transition_matrix:
+    - [0.16, 0.11, 0.02]    # bin 1  (most extreme drop)
+    - [0.14, 0.07, 0.02]    # bin 2
+    - [0.07, 0.12, 0.02]    # bin 3
+    - [0.03, 0.16, 0.02]    # bin 4
+    - [0.015, 0.2, 0.01]    # bin 5
+    - [0.015, 0.195, 0.025] # bin 6
+    - [0.02, 0.1255, 0.07]  # bin 7
+    - [0.02, 0.07, 0.11]    # bin 8
+    - [0.02, 0.05, 0.12]    # bin 9
+    - [0.02, 0.02, 0.08]    # bin 10 (deliberately down-weighted outlier bin)
 
 export:
   destination: asset

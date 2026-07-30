@@ -6,21 +6,53 @@ Google Earth Engine (GEE) JavaScript Code Editor tool.
 
 ## Status
 
-Pre-implementation / early scaffold. The Bayesian updating core is
-preserved from the legacy algorithm; everything around it — language,
-parameter handling, GUI vs. programmatic use — is being rebuilt.
+Early implementation, actively in progress (as of 2026-07-29). Config
+handling and continuous-evidence assembly (Landsat 5/7/8/9) are real and
+tested. The Bayesian updating core itself is being written now, against
+a credible published reconstruction of the legacy math — see "Reference
+papers" below — since the original GEE JavaScript source for that core
+still hasn't been obtained. See `CLAUDE.md`'s "Current code state" for
+the exact, up-to-date breakdown of what's real vs. stubbed vs. unverified.
 
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
 as a computation graph — this is a client-language choice, not a move off
 GEE.
 
+## Reference papers
+
+Two published papers (added 2026-07-29) stand in for the missing legacy
+algorithm source and are the actual basis for the engine code in
+`bulcd/bulc.py` and `bulcd/inputs.py`'s `organize_inputs()`:
+
+- `1-s2.0-S0034425716303248-main.pdf` — Cardille & Fortin (2016),
+  *Remote Sensing of Environment* — the original BULC paper; the
+  low-level Bayesian update math (update tables, the Bayes formula,
+  dampening).
+- `2022_Honours_Project_Written_Report__Eidan_Willis__compressed_.pdf`
+  — Eidan Willis's McGill honours thesis — BULC-D specifically:
+  harmonic expectation-model fitting, z-score binning, and the
+  hand-tuned "custom transition matrix."
+
+These are a credible, citable reconstruction of the method, not a port
+of the actual production source — see `CLAUDE.md`'s "Reference papers"
+section for the full math and explicit caveats about where this
+reconstruction is an assumption rather than a verified fact.
+
 ## Contents
 
 - `bulcd/` — the new Python package (in progress).
-  - `bulcd/config/schema.py` — typed configuration schema (draft) for
-    study area, sensors, temporal window, reduction band, advanced BULC
-    tuning, and export settings.
+  - `bulcd/config/schema.py` — typed configuration schema for study
+    area, sensors, temporal window, reduction band, advanced BULC
+    tuning (including the transition matrix / dampening factor above),
+    and export settings.
+  - `bulcd/inputs.py` — continuous multi-sensor evidence assembly
+    (real, Landsat 5/7/8/9) plus the z-score/expectation-model layer.
+  - `bulcd/bulc.py` — the generic, index-agnostic Bayesian updating
+    engine (update table → Bayes formula → dampening → posterior).
+  - `bulcd/engine.py` — BULC-D-specific orchestration gluing the above
+    two together (bins the z-score stream, looks up the transition
+    matrix, runs the engine).
 - `guiBULCD.rtf` — reference copy of the current production script (the
   ~7,500-line GEE JS GUI tool this rebuild replaces). Not edited in
   place — kept for reference only.

@@ -43,6 +43,13 @@ def test_loads_example_config():
     assert config.bin_cuts == [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
     assert config.plotting_means is True
 
+    assert config.evidence.expectation_first_year == 2015
+    assert config.evidence.expectation_last_year == 2017
+
+    assert config.bulc_advanced_params.dampening_factor == 0.5
+    assert len(config.bulc_advanced_params.custom_transition_matrix) == 10
+    assert config.bulc_advanced_params.custom_transition_matrix[0] == [0.16, 0.11, 0.02]
+
     assert config.export.destination == "asset"
     assert config.export.asset_folder == "users/example-user/example-project:bulcd_outputs/"
 
@@ -187,3 +194,85 @@ def test_minimal_config_uses_defaults(tmp_path):
     assert config.evidence.day_step_size == 4
     assert config.evidence.sensors["L8"].first_doy == 1
     assert config.evidence.sensors["L8"].last_doy == 365
+    assert config.evidence.expectation_first_year is None
+    assert config.evidence.expectation_last_year is None
+    assert config.bulc_advanced_params.custom_transition_matrix is None
+    assert config.bulc_advanced_params.dampening_factor == 0.5
+
+
+def test_expectation_window_requires_both_years_together(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(
+        "study_area:\n  aoi_asset: users/x/y\n"
+        "evidence:\n"
+        "  sensors:\n"
+        "    L8:\n      enabled: true\n"
+        "  expectation_first_year: 2015\n"
+        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
+    )
+    with pytest.raises(ConfigError, match="expectation_first_year and expectation_last_year"):
+        load_config(cfg_path)
+
+
+def test_expectation_window_must_be_ordered(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(
+        "study_area:\n  aoi_asset: users/x/y\n"
+        "evidence:\n"
+        "  sensors:\n"
+        "    L8:\n      enabled: true\n"
+        "  expectation_first_year: 2018\n"
+        "  expectation_last_year: 2015\n"
+        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
+    )
+    with pytest.raises(ConfigError, match="must be before"):
+        load_config(cfg_path)
+
+
+def test_expectation_window_must_overlap_an_enabled_sensor(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(
+        "study_area:\n  aoi_asset: users/x/y\n"
+        "evidence:\n"
+        "  sensors:\n"
+        "    L8:\n      enabled: true\n      first_year: 2013\n      last_year: 2014\n"
+        "  expectation_first_year: 2018\n"
+        "  expectation_last_year: 2019\n"
+        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
+    )
+    with pytest.raises(ConfigError, match="don't overlap"):
+        load_config(cfg_path)
+
+
+def test_custom_transition_matrix_shape_validated(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(
+        MINIMAL_YAML + "bulc_advanced_params:\n"
+        "  custom_transition_matrix:\n"
+        "    - [0.1, 0.1, 0.1]\n"
+        "    - [0.1, 0.1, 0.1]\n"
+    )
+    with pytest.raises(ConfigError, match="10x3"):
+        load_config(cfg_path)
+
+
+def test_dampening_factor_must_be_in_valid_range(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  dampening_factor: 1.5\n")
+    with pytest.raises(ConfigError, match="dampening_factor"):
+        load_config(cfg_path)
+
+
+def test_bin_cuts_and_transition_matrix_row_count_must_match(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    ten_row_matrix = "\n".join("    - [0.1, 0.1, 0.1]" for _ in range(10))
+    cfg_path.write_text(
+        MINIMAL_YAML
+        + "bin_cuts: [-1, 0, 1]\n"  # 4 bins
+        + "bulc_advanced_params:\n"
+        + "  custom_transition_matrix:\n"
+        + ten_row_matrix
+        + "\n"
+    )
+    with pytest.raises(ConfigError, match="these must match"):
+        load_config(cfg_path)

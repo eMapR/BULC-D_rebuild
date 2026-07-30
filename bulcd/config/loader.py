@@ -51,6 +51,18 @@ def load_config(path: str | Path) -> BULCDConfig:
             f"{path}: top-level YAML must be a mapping, got {type(raw).__name__}"
         )
 
+    bin_cuts = raw.get("bin_cuts", [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2])
+    bulc_advanced_params = _build_bulc_advanced_params(raw.get("bulc_advanced_params", {}))
+
+    if bulc_advanced_params.custom_transition_matrix is not None and len(bin_cuts) + 1 != len(
+        bulc_advanced_params.custom_transition_matrix
+    ):
+        raise ConfigError(
+            f"bin_cuts has {len(bin_cuts)} cut points (implying {len(bin_cuts) + 1} bins) but "
+            f"bulc_advanced_params.custom_transition_matrix has "
+            f"{len(bulc_advanced_params.custom_transition_matrix)} rows - these must match"
+        )
+
     return BULCDConfig(
         study_area=_build_study_area(_require_section(raw, "study_area", path)),
         evidence=_build_evidence(_require_section(raw, "evidence", path)),
@@ -58,13 +70,11 @@ def load_config(path: str | Path) -> BULCDConfig:
         reduction=_build_reduction(raw.get("reduction", {})),
         modality=_build_modality(raw.get("modality", {})),
         sensitivity=_build_sensitivity(raw.get("sensitivity", {})),
-        bin_cuts=raw.get(
-            "bin_cuts", [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
-        ),
+        bin_cuts=bin_cuts,
         harmonic_constant=raw.get("harmonic_constant", False),
         plotting_means=raw.get("plotting_means", False),
         verbose=raw.get("verbose", False),
-        bulc_advanced_params=BULCAdvancedParams(raw=raw.get("bulc_advanced_params", {})),
+        bulc_advanced_params=bulc_advanced_params,
         export=_build_export(raw.get("export", {})),
     )
 
@@ -115,10 +125,56 @@ def _build_evidence(section: dict[str, Any]) -> EvidenceConfig:
     if not any(s.enabled for s in sensors.values()):
         raise ConfigError("evidence.sensors: at least one sensor must have enabled: true")
 
+    expectation_first_year = section.get("expectation_first_year")
+    expectation_last_year = section.get("expectation_last_year")
+    if (expectation_first_year is None) != (expectation_last_year is None):
+        raise ConfigError(
+            "evidence: expectation_first_year and expectation_last_year must be set together"
+        )
+    if expectation_first_year is not None and expectation_last_year is not None:
+        if expectation_first_year >= expectation_last_year:
+            raise ConfigError(
+                "evidence: expectation_first_year must be before expectation_last_year"
+            )
+        if not _expectation_window_overlaps_a_sensor(
+            expectation_first_year, expectation_last_year, sensors
+        ):
+            raise ConfigError(
+                "evidence: expectation_first_year/expectation_last_year "
+                f"({expectation_first_year}-{expectation_last_year}) don't overlap any "
+                "enabled sensor's configured year range - the expectation-model fit "
+                "would have zero samples"
+            )
+
     return EvidenceConfig(
         day_step_size=section.get("day_step_size", 4),
         sensors=sensors,
+        expectation_first_year=expectation_first_year,
+        expectation_last_year=expectation_last_year,
     )
+
+
+def _expectation_window_overlaps_a_sensor(
+    expectation_first_year: int,
+    expectation_last_year: int,
+    sensors: dict[str, SensorEvidenceConfig],
+) -> bool:
+    """True if the expectation window overlaps at least one enabled sensor's
+    configured [first_year, last_year) range.
+
+    A sensor's first_year/last_year of None means "open-ended" (earliest/most
+    recent available - resolved later in inputs.py against real launch-year
+    data), treated here as -inf/+inf for overlap purposes rather than
+    importing inputs.py's launch-year table into the config layer.
+    """
+    for sensor in sensors.values():
+        if not sensor.enabled:
+            continue
+        sensor_first = sensor.first_year if sensor.first_year is not None else float("-inf")
+        sensor_last = sensor.last_year if sensor.last_year is not None else float("inf")
+        if sensor_first < expectation_last_year and expectation_first_year < sensor_last:
+            return True
+    return False
 
 
 def _build_sensor_evidence(entry: dict[str, Any], code: str) -> SensorEvidenceConfig:
@@ -192,6 +248,38 @@ def _build_sensitivity(section: dict[str, Any]) -> SensitivityConfig:
         z_score_denominator_factor=section.get(
             "z_score_denominator_factor", defaults.z_score_denominator_factor
         ),
+    )
+
+
+def _build_bulc_advanced_params(section: dict[str, Any]) -> BULCAdvancedParams:
+    if not isinstance(section, dict):
+        raise ConfigError(f"bulc_advanced_params must be a mapping, got {type(section).__name__}")
+
+    custom_transition_matrix = section.get("custom_transition_matrix")
+    if custom_transition_matrix is not None:
+        if len(custom_transition_matrix) != 10 or any(
+            len(row) != 3 for row in custom_transition_matrix
+        ):
+            raise ConfigError(
+                "bulc_advanced_params.custom_transition_matrix must be a 10x3 matrix "
+                "(10 z-score collection bins x 3 decision classes "
+                "[decrease, unchanged, increase])"
+            )
+
+    dampening_factor = section.get("dampening_factor", 0.5)
+    if not (0 < dampening_factor <= 1):
+        raise ConfigError(
+            f"bulc_advanced_params.dampening_factor ({dampening_factor}) must satisfy "
+            "0 < d <= 1 (Cardille & Fortin 2016 section 4.6)"
+        )
+
+    known_keys = {"custom_transition_matrix", "dampening_factor"}
+    raw = {k: v for k, v in section.items() if k not in known_keys}
+
+    return BULCAdvancedParams(
+        custom_transition_matrix=custom_transition_matrix,
+        dampening_factor=dampening_factor,
+        raw=raw,
     )
 
 
