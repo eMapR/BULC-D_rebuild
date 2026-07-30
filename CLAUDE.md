@@ -427,10 +427,9 @@ paper alone.
   rather than day-of-year, so multi-year baselines don't wrap around
   at year boundaries), then scores the *entire* evidence stream
   (baseline included, as a sanity check) into a continuous z-score
-  `ee.ImageCollection`. NOT YET VALIDATED against real Earth Engine:
-  needs `ee.Initialize(project=...)` with a real GEE Cloud project,
-  which we haven't picked for this repo yet (unlike the sibling
-  GeoTimeSeries project's `eastern-cascades-bugnet`).
+  `ee.ImageCollection`. VERIFIED against real Earth Engine (see "First
+  live-EE verification" above) at a single test pixel — not a
+  substitute for broader validation across more pixels/AOIs/conditions.
 - `bulcd/bulc.py` — NEW, real code: the generic, index/sensor-agnostic
   Bayesian updating engine (`dampen()`, `bayes_update()`, `run_bulc()`),
   a direct implementation of Cardille & Fortin (2016) Eq. 1/2 and its
@@ -442,15 +441,18 @@ paper alone.
   `ee.ImageCollection` rather than the legacy's single flattened
   multi-band `Image` fields — a deliberate divergence, more directly
   useful for "expose intermediate probability/uncertainty surfaces"
-  (Vision doc goal). NOT YET VALIDATED against real Earth Engine (same
-  blocker as above).
+  (Vision doc goal). VERIFIED against real Earth Engine (same single
+  test pixel as above, run through the full 61-step fold).
 - `bulcd/engine.py` — NEW, real code: the `afn_BULCD` equivalent, gluing
   `organize_inputs()`'s z-score stream to `bulc.py`'s generic engine via
   binning (`_bin_zscore`) and a transition-matrix lookup
   (`_bin_to_update_factors`). `run_bulcd()` fails loudly up front (before
   touching `ee.*` at all) if `custom_transition_matrix` isn't configured,
-  or if its row count doesn't match `bin_cuts`. NOT YET VALIDATED against
-  real Earth Engine (same blocker as above).
+  or if its row count doesn't match `bin_cuts`. VERIFIED against real
+  Earth Engine (same test run). `scripts/debug_run.py` is the actual
+  runnable entry point for this today — hardcoded small test AOI/config,
+  cheap `.getInfo()` sanity checks, not a real CLI (`bulcd/cli.py`
+  doesn't exist yet).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

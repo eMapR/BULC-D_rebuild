@@ -53,6 +53,11 @@ reconstruction is an assumption rather than a verified fact.
   - `bulcd/engine.py` — BULC-D-specific orchestration gluing the above
     two together (bins the z-score stream, looks up the transition
     matrix, runs the engine).
+- `scripts/debug_run.py` — the actual way to run the pipeline today
+  (`conda run -n bulcd python scripts/debug_run.py`). Not a real CLI
+  (`bulcd/cli.py` doesn't exist yet) - a hardcoded small test AOI/config
+  that prints intermediate values via cheap `.getInfo()` calls, so you
+  can sanity-check the pipeline without kicking off a billed export.
 - `guiBULCD.rtf` — reference copy of the current production script (the
   ~7,500-line GEE JS GUI tool this rebuild replaces). Not edited in
   place — kept for reference only.
