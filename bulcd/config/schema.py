@@ -92,6 +92,18 @@ class StudyAreaConfig:
     scale: int = 30  # export resolution, meters
     forest_mask_asset: str | None = None  # optional mask asset (mckenzeBULCD.rtf's forestMask)
 
+    # Legacy always applies afn_waterMask() unconditionally before
+    # displaying/exporting finalBulcProbs (legacy/BULCD-Caller-Current.txt)
+    # - we don't have that module's source, so this masks against the
+    # standard public JRC Global Surface Water dataset instead (see
+    # bulcd/engine.py's _water_mask()). A real, visible need: a live-EE
+    # disturbance map generated 2026-07-30 (see CLAUDE.md "Disturbance
+    # map") showed water bodies misclassified as "increase" (water's
+    # reflectance behaves nothing like the forest-tuned harmonic model).
+    # Defaults to True (matching legacy's unconditional behavior);
+    # exposed as a toggle since JRC water data may not suit every AOI.
+    mask_water: bool = True
+
 
 @dataclass
 class S2CloudMaskConfig:

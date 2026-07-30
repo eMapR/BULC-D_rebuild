@@ -199,6 +199,22 @@ def test_minimal_config_uses_defaults(tmp_path):
     assert config.evidence.expectation_last_year is None
     assert config.bulc_advanced_params.custom_transition_matrix is None
     assert config.bulc_advanced_params.dampening_factor == 0.5
+    assert config.study_area.mask_water is True
+
+
+def test_mask_water_can_be_disabled(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(
+        "study_area:\n"
+        "  aoi_asset: users/x/y\n"
+        "  mask_water: false\n"
+        "evidence:\n"
+        "  sensors:\n"
+        "    L8:\n      enabled: true\n"
+        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
+    )
+    config = load_config(cfg_path)
+    assert config.study_area.mask_water is False
 
 
 def test_expectation_window_requires_both_years_together(tmp_path):

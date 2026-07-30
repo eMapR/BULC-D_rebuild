@@ -106,6 +106,7 @@ def _build_study_area(section: dict[str, Any]) -> StudyAreaConfig:
         crs=section.get("crs", "EPSG:4326"),
         scale=section.get("scale", 30),
         forest_mask_asset=section.get("forest_mask_asset"),
+        mask_water=section.get("mask_water", True),
     )
 
 

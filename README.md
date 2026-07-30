@@ -61,11 +61,14 @@ reconstruction is an assumption rather than a verified fact.
   (`bulcd/cli.py` doesn't exist yet) - a hardcoded small test AOI/config
   that prints intermediate values via cheap `.getInfo()` calls, so you
   can sanity-check the pipeline without kicking off a billed export.
-  Two companion scripts test real known disturbances: `scripts/debug_bb_complex_fire.py`
-  (2003 B&B Complex Fire - the strongest validation the pipeline has had)
-  and `scripts/debug_long_baseline_disturbance.py` (a major finding: long
-  stable baselines can mask real disturbance at the default dampening
-  factor - see CLAUDE.md).
+  Companion scripts test real known disturbances: `scripts/debug_bb_complex_fire.py`
+  (2003 B&B Complex Fire - the strongest single-pixel validation the
+  pipeline has had), `scripts/debug_long_baseline_disturbance.py` (a
+  major finding: long stable baselines can mask real disturbance - see
+  CLAUDE.md), and `scripts/debug_disturbance_map.py` (the first full-AOI
+  spatial visualization, not just a single pixel - a coherent,
+  realistic-looking burn scar shape, plus the water-masking artifact/fix
+  described in CLAUDE.md "Disturbance map").
 - `guiBULCD.rtf` — reference copy of the current production script (the
   ~7,500-line GEE JS GUI tool this rebuild replaces). Not edited in
   place — kept for reference only.

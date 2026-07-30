@@ -252,6 +252,37 @@ useful context that isn't obvious from the field names alone:
   data-availability, which would silently drift if a sensor's own
   `first_year`/`last_year` changed later. `loader.py` validates the
   window overlaps at least one enabled sensor's configured range.
+
+  **The target period has no code representation at all - this is where
+  the modernization actually changes the shape of the problem, not just
+  the config surface.** The legacy scored one separate, fixed target
+  window against the expectation model, once. There is no
+  `target_collection` object anywhere in `organize_inputs()`. Concretely,
+  in `bulcd/inputs.py`:
+
+  ```python
+  harmonic_full = evidence_collection.map(_add_harmonic_terms)  # EVERY image, not just "target" ones
+  expectation_fitted_collection = harmonic_full.map(
+      lambda img: _add_fitted_band(img, fit.coefficients, fit.regressor_names)
+  )
+  lof_zscore = expectation_fitted_collection.map(_add_zscore).select("zscore")  # z-score for EVERY image, forever
+  ```
+
+  The *same* fitted expectation curve (fit only on the baseline window
+  above) is applied to score **every image in the entire evidence
+  stream** - including the baseline years themselves (a deliberate sanity
+  check: those z-scores should hover near 0, confirmed in "First live-EE
+  verification" above) and every year after, indefinitely, as far as the
+  archive goes. `bulcd/engine.py`'s `run_bulcd()` then takes that
+  per-timestep z-score sequence, bins each value, and folds them through
+  the sequential Bayesian updater (`bulc.run_bulc()`) one at a time. So
+  the legacy's single "expectation vs. one target period" comparison
+  becomes a continuous *sequence* of comparisons - every image is its own
+  mini-comparison against the same fixed expectation model, each one a
+  fresh piece of evidence folded into the running posterior via Bayes'
+  rule. That sequence, not a second fixed window, *is* "use the full
+  Landsat archive as continuous evidence" (Vision doc primary goal) in
+  literal code terms.
 - **`modalityDictionary`** (→ `ModalityConfig`): picks the seasonal-curve
   shape fit to the expectation period per pixel (constant = no
   seasonality, typically evergreen; unimodal = one seasonal peak,
@@ -572,6 +603,52 @@ dampening sweep and a `recency_factor` sweep reproducing the table above
 directly against the real `engine.run_bulcd()` code (not just the ad hoc
 experiment this was first tried in).
 
+## Disturbance map (2026-07-30): first full-AOI visualization, plus a water mask
+
+Every validation above only ever sampled a single pixel via
+`reduceRegion()`. `engine.run_bulcd()`'s `final_probabilities` has always
+been a full image over the entire AOI, not just a point - this was the
+first time it was actually looked at spatially, via
+`ee.Image.getThumbURL()` (a cheap, synchronous preview render, NOT
+`Export.image.toAsset/toDrive` - `bulcd/export.py` still doesn't exist).
+
+Rendered the B&B Complex Fire AOI (widened to ~13km, see
+`scripts/debug_disturbance_map.py`) as an RGB composite
+(R=decrease, G=unchanged, B=increase - the same convention the legacy
+caller used for `Map.addLayer(finalBulcProbs, ...)`). Result: a coherent,
+irregular red region with a realistic fire-perimeter shape, not noise
+scattered across the AOI - the strongest visual validation the pipeline
+has had, corroborating all the single-pixel numeric checks above.
+
+**Artifact found: water bodies misclassified as "increase"** (scattered
+blue specks, mostly in the AOI's upper portion and a lower-left cluster).
+Expected - water's reflectance behaves nothing like the forest-tuned
+harmonic model, and the legacy pipeline always applies `afn_waterMask()`
+before displaying/exporting results (`legacy/BULCD-Caller-Current.txt`);
+we'd never applied any water masking. Added `bulcd/engine.py`'s
+`_water_mask()`, using the standard public **JRC Global Surface Water**
+dataset (`JRC/GSW1_4/GlobalSurfaceWater`, band `occurrence`, threshold
+>50% - we don't have `afn_waterMask()`'s actual source, so this is a
+reasonable standard-dataset substitute, not a reconstruction of it).
+Wired in via `StudyAreaConfig.mask_water` (default `True`, matching the
+legacy's unconditional behavior; can be disabled).
+
+**Verified partial, not total, fix.** Rerendering with masking on shows
+real water bodies now correctly excluded (visible as new gaps in the
+map). But most of the original blue specks are still there. Sampling one
+directly: JRC `occurrence` at that exact pixel is `None` (zero recorded
+water history) - it isn't water at all. So the remaining "increase"
+speckling has a different, NOT YET IDENTIFIED cause - candidates include
+genuine small-scale greening, a terrain/shadow artifact in the Cascades'
+rugged relief, or persistent snow/ice at elevation even within the
+growing-season DOY window. Flagged here rather than investigated further
+this session - don't assume the water mask fully resolved the artifact
+just because it's now present in the code.
+
+`scripts/debug_disturbance_map.py` reproduces this (prints a thumbnail
+URL - fetching it requires an authenticated request, see the script's
+own docstring for the pattern used to build one).
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
@@ -652,16 +729,20 @@ experiment this was first tried in).
 - `bulcd/engine.py` — NEW, real code: the `afn_BULCD` equivalent, gluing
   `organize_inputs()`'s z-score stream to `bulc.py`'s generic engine via
   binning (`_bin_zscore`) and a transition-matrix lookup
-  (`_bin_to_update_factors`), and passing `dampening_factor`/
-  `recency_factor` through to `bulc.run_bulc()`. `run_bulcd()` fails
-  loudly up front (before touching `ee.*` at all) if
-  `custom_transition_matrix` isn't configured, or if its row count
-  doesn't match `bin_cuts`. VERIFIED against real Earth Engine at four
-  real test pixels. `scripts/debug_run.py`, `scripts/debug_bb_complex_fire.py`,
-  and `scripts/debug_long_baseline_disturbance.py` are the actual
-  runnable entry points today — hardcoded test AOIs/configs, cheap
-  `.getInfo()` sanity checks, not a real CLI (`bulcd/cli.py` doesn't
-  exist yet).
+  (`_bin_to_update_factors`), passing `dampening_factor`/
+  `recency_factor` through to `bulc.run_bulc()`, and applying
+  `_water_mask()` to the final output by default (`StudyAreaConfig.mask_water`
+  — see "Disturbance map" above; a verified-partial fix, not a complete
+  one). `run_bulcd()` fails loudly up front (before touching `ee.*` at
+  all) if `custom_transition_matrix` isn't configured, or if its row
+  count doesn't match `bin_cuts`. VERIFIED against real Earth Engine at
+  four real test pixels plus one full-AOI map. `scripts/debug_run.py`,
+  `scripts/debug_bb_complex_fire.py`, `scripts/debug_long_baseline_disturbance.py`,
+  and `scripts/debug_disturbance_map.py` are the actual runnable entry
+  points today — hardcoded test AOIs/configs, cheap preview renders
+  (`.getInfo()`/`.getThumbURL()`), not a real CLI (`bulcd/cli.py` doesn't
+  exist yet) and not a real export (`bulcd/export.py` doesn't exist
+  either).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

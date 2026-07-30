@@ -8,13 +8,17 @@ transition matrix" (Willis 2022 - see CLAUDE.md "Reference papers") to
 build the per-timestep "update factor" images that `bulcd/bulc.py`'s
 generic engine folds through Bayes' formula.
 
-VALIDATED against real Earth Engine at four real test pixels - see
-CLAUDE.md "First live-EE verification" / "Known-burn validation" /
-"Moderate-severity test" / "Major finding: long stable baselines can
-mask real disturbance". That last section is why `run_bulcd()` passes
-`recency_factor` through to `bulc.run_bulc()` - an optional, off-by-default
-extension beyond the reconstructed classic method, added to address a
-real, empirically-found failure mode.
+VALIDATED against real Earth Engine at four real test pixels AND one
+full-AOI disturbance map - see CLAUDE.md "First live-EE verification" /
+"Known-burn validation" / "Moderate-severity test" / "Major finding:
+long stable baselines can mask real disturbance" / "Disturbance map".
+`run_bulcd()` passes `recency_factor` through to `bulc.run_bulc()` - an
+optional, off-by-default extension beyond the reconstructed classic
+method, added to address a real, empirically-found failure mode - and
+applies `_water_mask()` to the final output by default (matching the
+legacy's always-on `afn_waterMask()`, whose source we don't have, against
+the standard public JRC Global Surface Water dataset instead), after a
+live disturbance map showed water bodies misclassified as "increase."
 """
 
 from __future__ import annotations
@@ -23,7 +27,14 @@ import ee
 
 from bulcd import bulc
 from bulcd.config.schema import BULCDConfig
-from bulcd.inputs import organize_inputs
+from bulcd.inputs import organize_inputs, resolve_study_area
+
+# JRC Global Surface Water's "occurrence" band: % of 1984-2021 months
+# observed as water. 50 is a common "seasonal to permanent water" cutoff,
+# not a value taken from the legacy source - we don't have afn_waterMask()
+# (legacy/BULCD-Caller-Current.txt)'s actual implementation, so this masks
+# against a standard public dataset instead. See _water_mask()'s docstring.
+_WATER_OCCURRENCE_THRESHOLD = 50.0
 
 # Fixed band-order contract with bulc.py (see its module docstring):
 # index 0 = decrease, 1 = unchanged, 2 = increase - matching the legacy
@@ -64,6 +75,22 @@ def _bin_to_update_factors(
     return ee.Image.cat(class_images)
 
 
+def _water_mask(region: ee.Geometry) -> ee.Image:
+    """Boolean mask, True where NOT water, per JRC Global Surface Water.
+
+    Legacy equivalent: afn_waterMask() (legacy/BULCD-Caller-Current.txt),
+    applied unconditionally before displaying/exporting finalBulcProbs -
+    we don't have that module's source, so this uses the standard public
+    JRC Global Surface Water dataset instead. Added 2026-07-30 after a
+    live-EE disturbance map (see CLAUDE.md "Disturbance map") showed water
+    bodies misclassified as "increase" - water's reflectance behaves
+    nothing like the forest-tuned harmonic model this pipeline fits.
+    """
+    occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence").clip(region)
+    is_water = occurrence.gt(_WATER_OCCURRENCE_THRESHOLD).unmask(0)
+    return is_water.Not()
+
+
 def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
     """Runs the full BULC-D pipeline: organize_inputs() -> bin + transition
     matrix -> bulc.run_bulc(). Raises ValueError up front if
@@ -100,9 +127,17 @@ def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
         ]
     )
 
-    return bulc.run_bulc(
+    result = bulc.run_bulc(
         update_factor_collection,
         initial_prior,
         dampening_factor=advanced.dampening_factor,
         recency_factor=advanced.recency_factor,
     )
+
+    if config.study_area.mask_water:
+        region = resolve_study_area(config.study_area)
+        result.final_probabilities = result.final_probabilities.updateMask(
+            _water_mask(region)
+        )
+
+    return result
