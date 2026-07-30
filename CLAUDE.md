@@ -493,17 +493,38 @@ stable years means more compounding "confirm normal" evidence to
 overturn. A pixel with 40 years of stable history before a 2020
 disturbance would face an even steeper climb than this 14-year case.
 
+**Follow-up test: does lowering the default to `d=0.05` actually fix
+this?** Reran all four test pixels above (stable, B&B Complex fire,
+moderate-severity, long-baseline disturbance) at `d=0.5` vs `d=0.05`:
+
+| Point | `d=0.5` (argmax) | `d=0.05` (argmax) | Changed? |
+|---|---|---|---|
+| Stable/unchanged | unchanged 0.9999999937 | unchanged 0.65 | Same label, much less confident |
+| B&B Complex fire | decrease 0.9999 | decrease 0.67 | Same (correct) label, less confident |
+| Moderate-severity | unchanged 0.71 | decrease 0.50 vs. 0.485 | **Flips** - barely, to the arguably-more-correct answer |
+| Long-baseline disturbance | unchanged 0.99999999999936 | unchanged 0.846 | **Still wrong** - confidence drops a lot but doesn't flip |
+
+**Conclusion: dampening alone, even pushed fairly hard (`d=0.05`, and
+per the sweep above even `d=0.02`), is NOT sufficient to fix the worst
+case.** It reduces overconfidence broadly (useful) and correctly nudges
+the genuinely-ambiguous moderate-severity pixel toward "decrease," but
+the stark 14-year-stable/9-year-disturbed pixel stays misclassified as
+"unchanged" even at `d=0.02`. This rules out "just lower the default
+dampening factor" as a complete fix by itself - it's a real mitigant,
+not a solution, for this specific failure mode.
+
 **Open design question, NOT resolved:** whether/how to address this is a
 real decision, not something to default into silently:
-- Lower the default `dampening_factor` further (tested range above
-  suggests something like 0.05 is needed for competitive detection in a
-  case this stark - but that's a specific number tuned to one pixel and
-  one matrix, not validated broadly).
+- Lower the default `dampening_factor` further - helps broadly (less
+  overconfidence everywhere, flips the ambiguous moderate-severity case)
+  but per the table above does NOT by itself fix the stark long-baseline
+  case even at `d=0.02`. A partial mitigant, not a full solution.
 - Add a recency-weighting/forgetting mechanism so very old evidence
   matters less than recent evidence - NOT part of the classic BULC
   formulation described in Cardille & Fortin (2016) or Willis (2022);
   this would be a genuine departure from the reconstructed method, not
-  just a parameter tweak.
+  just a parameter tweak. Given dampening alone doesn't fully solve it,
+  this is looking more necessary, not just an alternative.
 - Rebalance the transition matrix's bin 1 vs. bin 5/6 asymmetry so
   "decrease" evidence tilts as hard, per observation, as "unchanged"
   evidence does - but that changes the matrix itself, and we don't have
