@@ -29,8 +29,19 @@ uses the convention [decrease, unchanged, increase] (matching the legacy
 caller script's `finalBulcProbs.select(0/1/2)` band-index usage, verified
 in legacy/BULCD-Caller-Current.txt).
 
-NOT YET VALIDATED against real Earth Engine - see CLAUDE.md's standing
-caveat on bulcd/inputs.py; same GEE-Cloud-project blocker applies here.
+VALIDATED against real Earth Engine at four real test pixels (see
+CLAUDE.md "First live-EE verification" / "Known-burn validation" /
+"Moderate-severity test" / "Major finding: long stable baselines can
+mask real disturbance").
+
+`discount()`/`run_bulc()`'s `recency_factor` parameter is NOT part of
+Cardille & Fortin (2016) or Willis (2022) - it's a genuine algorithmic
+addition made 2026-07-30 to address a real, empirically-found failure
+mode (see CLAUDE.md "Recency weighting" below), not a port of anything
+in the reconstructed source material. Defaults to `1.0` (off), so the
+engine is faithful to the reconstructed classic method unless a caller
+opts in - "preserve the Bayesian updating core" (CLAUDE.md modernization
+goal) means this should never be silently on.
 """
 
 from __future__ import annotations
@@ -100,6 +111,40 @@ def bayes_update(prior: ee.Image, update_factors: ee.Image) -> ee.Image:
     return posterior.unmask(prior)
 
 
+def discount(probabilities: ee.Image, recency_factor: float) -> ee.Image:
+    """Power-discounts a probability image so older accumulated evidence's
+    influence decays geometrically relative to more recent evidence.
+
+    posterior_c = probabilities_c^gamma / sum_c(probabilities_c^gamma)
+
+    NOT part of the reconstructed classic BULC method (see module
+    docstring) - an addition found 2026-07-30 to address a real failure
+    mode: over long, mostly-stable evidence streams, many years of mild
+    "confirm normal" evidence can compound (via repeated bayes_update()
+    calls) into a lead that a later, genuine, sustained disturbance can't
+    overturn even with aggressive dampening (see CLAUDE.md "Major
+    finding"). Applying this after every bayes_update() call means each
+    single step's influence on the running posterior decays by a factor
+    of `recency_factor` for every subsequent step - so evidence from N
+    steps ago carries roughly `recency_factor^N` of its original weight,
+    while the most recent step is never discounted. recency_factor=1.0
+    is a no-op (exact classic behavior, no decay).
+
+    Verified empirically at four real test pixels: recency_factor=0.98
+    flips a previously-invisible 9-year disturbance (masked by a 14-year
+    stable baseline) to a correct classification, while leaving two
+    unambiguous cases (a stable pixel, a confidently-detected real fire)
+    correctly classified with high confidence, and leaving a genuinely
+    ambiguous moderate-severity case appropriately unstable across nearby
+    values - full comparison table in CLAUDE.md.
+    """
+    if recency_factor == 1.0:
+        return probabilities
+    discounted = probabilities.pow(recency_factor)
+    total = discounted.reduce(ee.Reducer.sum())
+    return discounted.divide(total)
+
+
 def _argmax_label(probabilities: ee.Image) -> ee.Image:
     """Cardille & Fortin (2016) section 2.5: the BULC "classification" at
     any time step is just argmax over the current probability vector."""
@@ -110,13 +155,16 @@ def run_bulc(
     update_factor_collection: ee.ImageCollection,
     initial_prior: ee.Image,
     dampening_factor: float = 0.5,
+    recency_factor: float = 1.0,
 ) -> BulcResult:
     """Folds bayes_update() over a time-ordered update-factor collection.
 
     `update_factor_collection` must already be sorted by time (the caller's
     responsibility - bulcd/engine.py sorts via assemble_evidence_collection()
     upstream) and its images must match initial_prior's band count/order
-    (see module docstring).
+    (see module docstring). `recency_factor` defaults to 1.0 (off, no
+    departure from the reconstructed classic method) - see discount()'s
+    docstring before turning it on.
     """
 
     def _step(image: ee.Image, accumulator: ee.Dictionary) -> ee.Dictionary:
@@ -127,6 +175,7 @@ def run_bulc(
 
         dampened = dampen(ee.Image(image), dampening_factor)
         posterior = bayes_update(prior, dampened)
+        posterior = discount(posterior, recency_factor)
         classification = _argmax_label(posterior)
 
         return ee.Dictionary(

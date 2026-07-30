@@ -273,12 +273,20 @@ def _build_bulc_advanced_params(section: dict[str, Any]) -> BULCAdvancedParams:
             "0 < d <= 1 (Cardille & Fortin 2016 section 4.6)"
         )
 
-    known_keys = {"custom_transition_matrix", "dampening_factor"}
+    recency_factor = section.get("recency_factor", 1.0)
+    if not (0 < recency_factor <= 1):
+        raise ConfigError(
+            f"bulc_advanced_params.recency_factor ({recency_factor}) must satisfy "
+            "0 < recency_factor <= 1 (see bulc.py's discount())"
+        )
+
+    known_keys = {"custom_transition_matrix", "dampening_factor", "recency_factor"}
     raw = {k: v for k, v in section.items() if k not in known_keys}
 
     return BULCAdvancedParams(
         custom_transition_matrix=custom_transition_matrix,
         dampening_factor=dampening_factor,
+        recency_factor=recency_factor,
         raw=raw,
     )
 

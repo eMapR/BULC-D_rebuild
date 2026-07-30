@@ -8,8 +8,13 @@ transition matrix" (Willis 2022 - see CLAUDE.md "Reference papers") to
 build the per-timestep "update factor" images that `bulcd/bulc.py`'s
 generic engine folds through Bayes' formula.
 
-NOT YET VALIDATED against real Earth Engine - same GEE-Cloud-project
-blocker as the rest of this package (see CLAUDE.md).
+VALIDATED against real Earth Engine at four real test pixels - see
+CLAUDE.md "First live-EE verification" / "Known-burn validation" /
+"Moderate-severity test" / "Major finding: long stable baselines can
+mask real disturbance". That last section is why `run_bulcd()` passes
+`recency_factor` through to `bulc.run_bulc()` - an optional, off-by-default
+extension beyond the reconstructed classic method, added to address a
+real, empirically-found failure mode.
 """
 
 from __future__ import annotations
@@ -99,4 +104,5 @@ def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
         update_factor_collection,
         initial_prior,
         dampening_factor=advanced.dampening_factor,
+        recency_factor=advanced.recency_factor,
     )

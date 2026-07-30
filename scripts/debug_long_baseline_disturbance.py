@@ -13,8 +13,11 @@ stay between -5 and -10.9 for the following 9 years - about as
 unambiguous a disturbance signal as this pipeline will ever see. Despite
 that, at dampening_factor=0.5 the final classification is
 unchanged=0.9999999999994. This script prints the full z-score time
-series plus a dampening-factor sweep showing how much dampening it
-actually takes for "decrease" to become competitive.
+series, a dampening-factor sweep showing dampening alone doesn't fix it
+even at d=0.02, and a recency_factor sweep showing bulc.py's discount()
+(CLAUDE.md "Recency weighting") DOES fix it at recency_factor=0.98 -
+without breaking the other three validated test pixels (see CLAUDE.md
+for that comparison).
 
 Usage:
     conda run -n bulcd python scripts/debug_long_baseline_disturbance.py
@@ -65,7 +68,7 @@ NBR12_TRANSITION_MATRIX = [
 ]
 
 
-def make_config(dampening_factor: float) -> BULCDConfig:
+def make_config(dampening_factor: float, recency_factor: float = 1.0) -> BULCDConfig:
     return BULCDConfig(
         study_area=StudyAreaConfig(aoi_coordinates=SMALL_AOI),
         evidence=EvidenceConfig(
@@ -96,6 +99,7 @@ def make_config(dampening_factor: float) -> BULCDConfig:
         bulc_advanced_params=BULCAdvancedParams(
             custom_transition_matrix=NBR12_TRANSITION_MATRIX,
             dampening_factor=dampening_factor,
+            recency_factor=recency_factor,
         ),
     )
 
@@ -119,10 +123,19 @@ for row in rows:
     ts = datetime.datetime.utcfromtimestamp(row[time_idx] / 1000).strftime("%Y-%m-%d")
     print(f"{ts}  zscore={row[zscore_idx]:.3f}")
 
-print("=== dampening_factor sweep ===")
+print("=== dampening_factor sweep (recency_factor off) ===")
 for d in [0.5, 0.2, 0.1, 0.05, 0.02]:
     result = engine.run_bulcd(make_config(dampening_factor=d))
     probs = result.final_probabilities.reduceRegion(
         reducer=ee.Reducer.first(), geometry=POINT, scale=30
     ).getInfo()
     print(f"d={d}: {probs}")
+
+print("=== recency_factor sweep (dampening_factor=0.5) ===")
+print("(0.98 fixes it; dampening alone never does, even at d=0.02 above)")
+for gamma in [1.0, 0.99, 0.98, 0.95]:
+    result = engine.run_bulcd(make_config(dampening_factor=0.5, recency_factor=gamma))
+    probs = result.final_probabilities.reduceRegion(
+        reducer=ee.Reducer.first(), geometry=POINT, scale=30
+    ).getInfo()
+    print(f"recency_factor={gamma}: {probs}")

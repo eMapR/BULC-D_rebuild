@@ -47,6 +47,7 @@ def test_loads_example_config():
     assert config.evidence.expectation_last_year == 2017
 
     assert config.bulc_advanced_params.dampening_factor == 0.5
+    assert config.bulc_advanced_params.recency_factor == 1.0
     assert len(config.bulc_advanced_params.custom_transition_matrix) == 10
     assert config.bulc_advanced_params.custom_transition_matrix[0] == [0.16, 0.11, 0.02]
 
@@ -260,6 +261,24 @@ def test_dampening_factor_must_be_in_valid_range(tmp_path):
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  dampening_factor: 1.5\n")
     with pytest.raises(ConfigError, match="dampening_factor"):
+        load_config(cfg_path)
+
+
+def test_recency_factor_defaults_to_off(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.bulc_advanced_params.recency_factor == 1.0
+
+
+def test_recency_factor_must_be_in_valid_range(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  recency_factor: 1.5\n")
+    with pytest.raises(ConfigError, match="recency_factor"):
+        load_config(cfg_path)
+
+    cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  recency_factor: 0\n")
+    with pytest.raises(ConfigError, match="recency_factor"):
         load_config(cfg_path)
 
 

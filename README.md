@@ -49,7 +49,10 @@ reconstruction is an assumption rather than a verified fact.
   - `bulcd/inputs.py` — continuous multi-sensor evidence assembly
     (real, Landsat 5/7/8/9) plus the z-score/expectation-model layer.
   - `bulcd/bulc.py` — the generic, index-agnostic Bayesian updating
-    engine (update table → Bayes formula → dampening → posterior).
+    engine (update table → Bayes formula → dampening → posterior), plus
+    an optional, off-by-default recency-weighting extension
+    (`discount()`) not found in the reference papers — see CLAUDE.md
+    "Recency weighting".
   - `bulcd/engine.py` — BULC-D-specific orchestration gluing the above
     two together (bins the z-score stream, looks up the transition
     matrix, runs the engine).

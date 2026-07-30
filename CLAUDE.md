@@ -513,28 +513,64 @@ the stark 14-year-stable/9-year-disturbed pixel stays misclassified as
 dampening factor" as a complete fix by itself - it's a real mitigant,
 not a solution, for this specific failure mode.
 
-**Open design question, NOT resolved:** whether/how to address this is a
-real decision, not something to default into silently:
-- Lower the default `dampening_factor` further - helps broadly (less
-  overconfidence everywhere, flips the ambiguous moderate-severity case)
-  but per the table above does NOT by itself fix the stark long-baseline
-  case even at `d=0.02`. A partial mitigant, not a full solution.
-- Add a recency-weighting/forgetting mechanism so very old evidence
-  matters less than recent evidence - NOT part of the classic BULC
-  formulation described in Cardille & Fortin (2016) or Willis (2022);
-  this would be a genuine departure from the reconstructed method, not
-  just a parameter tweak. Given dampening alone doesn't fully solve it,
-  this is looking more necessary, not just an alternative.
-- Rebalance the transition matrix's bin 1 vs. bin 5/6 asymmetry so
-  "decrease" evidence tilts as hard, per observation, as "unchanged"
-  evidence does - but that changes the matrix itself, and we don't have
-  the real production matrix to compare against for whether this
-  asymmetry is intentional or an artifact of Willis's one worked example.
+Three possible directions were considered: lowering `dampening_factor`
+further (ruled out above - doesn't fully fix it even at `d=0.02`); adding
+a recency-weighting/forgetting mechanism (not part of the classic BULC
+formulation, a genuine departure from the reconstructed method); or
+rebalancing the transition matrix itself (no real production matrix to
+compare against, so any rebalancing would be a guess). Recency weighting
+was implemented and validated - see "Recency weighting" below.
 
-None of these have been applied. Flag this prominently before treating
-any BULC-D output over long evidence windows as reliable "no change"
-labeling without checking dampening sensitivity first, the way this
-finding was uncovered.
+## Recency weighting (2026-07-30): implemented and validated
+
+`bulcd/bulc.py` gained a new function, `discount()`, and `run_bulc()`/
+`run_bulcd()` gained a new optional parameter, `recency_factor`
+(threaded through `BULCAdvancedParams.recency_factor`, schema/loader
+validated to `0 < recency_factor <= 1`, same pattern as
+`dampening_factor`). **This is NOT part of Cardille & Fortin (2016) or
+Willis (2022) - a genuine algorithmic addition**, not a port of anything
+in the reconstructed source material. Mechanism: after each
+`bayes_update()` step, the posterior is raised to the power
+`recency_factor` and renormalized (`posterior^gamma / sum(posterior^gamma)`).
+At `gamma=1.0` (the default - off) this is an exact no-op, so the engine
+remains faithful to the reconstructed classic method unless a caller
+explicitly opts in - "preserve the Bayesian updating core" (CLAUDE.md
+modernization goal) means this must never be a silent default. At
+`gamma<1`, each step's influence on the running posterior decays
+geometrically relative to the most recent step, which directly targets
+the compounding-imbalance mechanism described above.
+
+**Validated by rerunning all four test pixels at `gamma=1.0` (off) vs.
+`gamma=0.99`/`0.98`/`0.95`, all at `dampening_factor=0.5`:**
+
+| Point | gamma=1.0 (off) | gamma=0.99 | gamma=0.98 | gamma=0.95 |
+|---|---|---|---|---|
+| Stable/unchanged | unchanged 0.99999999 | unchanged 0.9999989 | unchanged 0.99996 | unchanged 0.9933 |
+| B&B Complex fire | decrease 0.9999 | decrease 0.9995 | decrease 0.9930 | decrease 0.8825 |
+| Moderate-severity | unchanged 0.71 | ~toss-up (0.49/0.51) | unchanged 0.77 | unchanged 0.82 |
+| **Long-baseline disturbance** | **unchanged 0.9999999999994 (wrong)** | unchanged 0.81 (still wrong) | **decrease 0.93 (correct)** | decrease 0.88 (correct) |
+
+At `gamma=0.98`: the long-baseline case **flips to the correct
+classification**, while the two unambiguous cases (stable, B&B fire)
+*stay* correctly classified with high confidence - the fix doesn't come
+at the cost of breaking what already worked. The moderate-severity case
+wobbles non-monotonically across gamma values, which is expected for a
+genuinely borderline case (MTBS itself only calls it "moderate"), not a
+red flag.
+
+**Default stays `recency_factor=1.0` (off).** This was a deliberate
+choice, not an oversight: unlike `dampening_factor` (whose 0.5 default
+matches Cardille & Fortin's own tested value), there is no published
+value for this parameter anywhere in the reference material - it's a
+novel addition validated against exactly one stark failure case plus
+three others as regression checks, not broadly validated. Turn it on
+deliberately per-config, informed by this section, not by assuming the
+default should change again.
+
+`scripts/debug_long_baseline_disturbance.py` now includes both the
+dampening sweep and a `recency_factor` sweep reproducing the table above
+directly against the real `engine.run_bulcd()` code (not just the ad hoc
+experiment this was first tried in).
 
 ## Environment
 
@@ -554,11 +590,13 @@ finding was uncovered.
   `expectation_last_year` baseline window — see "Design decision: the
   expectation baseline window" below), `ReductionConfig`, `ModalityConfig`,
   `SensitivityConfig`, `BULCAdvancedParams` (now partially typed:
-  `custom_transition_matrix`, `dampening_factor`, plus an opaque `raw`
-  dict for whatever else `BULCD-AdvancedParameters-v5` turns out to hold
-  — see "Reference papers" above), `ExportConfig`). Each field's
-  docstring cites which legacy field it replaces and why; see the module
-  docstring for full provenance.
+  `custom_transition_matrix`, `dampening_factor`, `recency_factor` (see
+  "Recency weighting" above — NOT from the legacy schema, a 2026-07-30
+  addition, defaults off), plus an opaque `raw` dict for whatever else
+  `BULCD-AdvancedParameters-v5` turns out to hold — see "Reference
+  papers" above), `ExportConfig`). Each field's docstring cites which
+  legacy field it replaces and why; see the module docstring for full
+  provenance.
 - `bulcd/config/loader.py` — `load_config(path) -> BULCDConfig`. Parses
   YAML, validates required fields and enum-like values section by
   section (including cross-field checks like "exactly one of
@@ -598,26 +636,32 @@ finding was uncovered.
 - `bulcd/bulc.py` — NEW, real code: the generic, index/sensor-agnostic
   Bayesian updating engine (`dampen()`, `bayes_update()`, `run_bulc()`),
   a direct implementation of Cardille & Fortin (2016) Eq. 1/2 and its
-  dampening factor. Mirrors the legacy's actual module split (this is
-  the still-unfetched `BULC-Minimal-Module-107`'s counterpart; `afn_BULCD`'s
-  counterpart is `engine.py` below) — this module has no idea what a
-  z-score or a burn index is, only "update factor" images and a running
-  prior. `BulcResult.probability_stack`/`classification_stack` are
+  dampening factor, PLUS `discount()` — a `recency_factor` extension
+  added 2026-07-30 that's NOT part of the reconstructed classic method
+  (see "Recency weighting" above), off by default. Mirrors the legacy's
+  actual module split (this is the still-unfetched
+  `BULC-Minimal-Module-107`'s counterpart; `afn_BULCD`'s counterpart is
+  `engine.py` below) — this module has no idea what a z-score or a burn
+  index is, only "update factor" images and a running prior.
+  `BulcResult.probability_stack`/`classification_stack` are
   `ee.ImageCollection` rather than the legacy's single flattened
   multi-band `Image` fields — a deliberate divergence, more directly
   useful for "expose intermediate probability/uncertainty surfaces"
-  (Vision doc goal). VERIFIED against real Earth Engine (same single
-  test pixel as above, run through the full 61-step fold).
+  (Vision doc goal). VERIFIED against real Earth Engine at four real
+  test pixels (see all the sections above).
 - `bulcd/engine.py` — NEW, real code: the `afn_BULCD` equivalent, gluing
   `organize_inputs()`'s z-score stream to `bulc.py`'s generic engine via
   binning (`_bin_zscore`) and a transition-matrix lookup
-  (`_bin_to_update_factors`). `run_bulcd()` fails loudly up front (before
-  touching `ee.*` at all) if `custom_transition_matrix` isn't configured,
-  or if its row count doesn't match `bin_cuts`. VERIFIED against real
-  Earth Engine (same test run). `scripts/debug_run.py` is the actual
-  runnable entry point for this today — hardcoded small test AOI/config,
-  cheap `.getInfo()` sanity checks, not a real CLI (`bulcd/cli.py`
-  doesn't exist yet).
+  (`_bin_to_update_factors`), and passing `dampening_factor`/
+  `recency_factor` through to `bulc.run_bulc()`. `run_bulcd()` fails
+  loudly up front (before touching `ee.*` at all) if
+  `custom_transition_matrix` isn't configured, or if its row count
+  doesn't match `bin_cuts`. VERIFIED against real Earth Engine at four
+  real test pixels. `scripts/debug_run.py`, `scripts/debug_bb_complex_fire.py`,
+  and `scripts/debug_long_baseline_disturbance.py` are the actual
+  runnable entry points today — hardcoded test AOIs/configs, cheap
+  `.getInfo()` sanity checks, not a real CLI (`bulcd/cli.py` doesn't
+  exist yet).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

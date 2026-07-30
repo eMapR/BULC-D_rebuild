@@ -236,6 +236,25 @@ class BULCAdvancedParams:
     # exists to prevent.
     dampening_factor: float = 0.5
 
+    # NOT part of the legacy schema, NOT in Cardille & Fortin (2016) or
+    # Willis (2022) - a genuine algorithmic addition (bulc.py's
+    # discount()), made 2026-07-30 to address a real, empirically-found
+    # failure mode: over long, mostly-stable evidence streams, many years
+    # of mild "confirm normal" evidence can compound into a lead that a
+    # later, genuine, sustained disturbance can't overturn even with
+    # aggressive dampening (see CLAUDE.md "Major finding: long stable
+    # baselines can mask real disturbance"). Powers each step's posterior
+    # by this factor and renormalizes, so older evidence's influence
+    # decays geometrically relative to recent evidence.
+    # Defaults to 1.0 (off) - "preserve the Bayesian updating core"
+    # (CLAUDE.md modernization goal) means this extension must be an
+    # explicit opt-in, never a silent default. Verified empirically:
+    # 0.98 fixes a previously-invisible 9-year disturbance without
+    # breaking two other validated (stable / confidently-detected-fire)
+    # test pixels - see CLAUDE.md "Recency weighting" for the full
+    # comparison table before choosing a value.
+    recency_factor: float = 1.0
+
     raw: dict = field(default_factory=dict)
 
 
