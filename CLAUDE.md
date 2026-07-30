@@ -371,6 +371,48 @@ it explicitly - just no longer the silent default. This is a documented,
 empirically-observed finding, not a theoretical concern from reading the
 paper alone.
 
+## Known-burn validation (2026-07-29): the 2003 B&B Complex Fire
+
+The first live test above only exercised an "unchanged" (never-burned)
+pixel. To validate the "decrease/burn" path, the pipeline was run against
+a real, known-burned point (user-supplied coordinates,
+`-121.90249210117729, 44.53142096854933`, central Oregon Cascades) —
+identified as inside the **2003 B&B Complex Fire** (ignited Aug 15, 2003).
+
+Two dead ends before the working test, both informative:
+- First attempt used only Landsat 8 (2013+) with a 2014–2018 baseline.
+  Result: mostly *positive* z-scores in later years (0.7–1.25), i.e.
+  apparent regrowth, not a burn signal — because a fire in 2003 predates
+  Landsat 8 entirely. An L8-only evidence window can only see the tail
+  end of recovery, never the actual transition. Fixed by enabling
+  **Landsat 5** (2000–2012) to reach back before the fire — the first
+  real exercise of the "use the full Landsat archive," not just L8, and
+  a concrete illustration of why that modernization goal matters in
+  practice, not just in principle.
+- A separate full-year-DOY test (unrelated pixel, see the dampening-factor
+  test above) surfaced wild winter z-scores (as extreme as ±6.8) from
+  snow reflectance contamination — matching Willis (2022)'s own discussion
+  section almost exactly. Growing-season-only DOY filtering (roughly
+  May–Oct) avoids this and is the right default, not full-year.
+
+With L5 (2000–2012, pre-fire baseline 2000–2002, R²=0.49) + L8
+(2014–2023) combined and growing-season DOY filtering, the z-score
+trajectory is unambiguous:
+
+```
+2003-08-18 (3 days post-ignition): zscore=-1.61
+2003-09-26:                        zscore=-5.88
+2004 through 2023, every year:     zscore between -2.8 and -6.3 (never recovers)
+```
+
+`engine.run_bulcd()`'s final classification at that point:
+`decrease=0.9999`, `unchanged=0.000076`, `increase=2.6e-28` — confident,
+correct. This is the strongest end-to-end validation the pipeline has
+had: a real pre-fire baseline, a real fire, and a correct answer, with
+the exact ignition date visible in the z-score jump. Still only one
+pixel, one fire, one transition matrix (Willis's NBR12 example, not a
+verified production default) — not a substitute for broader validation.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
