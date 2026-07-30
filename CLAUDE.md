@@ -413,6 +413,108 @@ the exact ignition date visible in the z-score jump. Still only one
 pixel, one fire, one transition matrix (Willis's NBR12 example, not a
 verified production default) — not a substitute for broader validation.
 
+## Moderate-severity test (2026-07-29): the bin/matrix mechanism working as designed
+
+A second point was picked via MTBS burn-severity data (`USFS/GTAC/MTBS/
+annual_burn_severity_mosaics/v1`, band `Severity`, classes 1=Unburned-Low,
+2=Low, 3=Moderate, 4=High), ~2.5km from the B&B Complex point above,
+classified as MTBS severity 3 ("Moderate"). Note: MTBS actually classifies
+the *original* B&B point above as severity 2 ("Low"), despite its
+persistent -3 to -6 z-scores for 20 years — a discrepancy not
+investigated further, flagged here in case it matters later.
+
+Counterintuitive at first glance: the moderate-severity point's raw
+z-scores were *more* extreme (down to -9.6) than the original point's
+(-5.88), yet its final classification was far less confident
+(`decrease=0.29, unchanged=0.71`, vs. the original's `decrease=0.9999`).
+Explained by checking the actual bin distribution at each pixel
+(`bulcd/engine.py`'s `_bin_zscore()`, using the default `bin_cuts` whose
+outermost cuts are ±2 - any z beyond that collapses into the same
+bin regardless of magnitude, so -2.1 and -9.6 get identical treatment):
+
+```
+                        bin 1 (extreme drop)   bins 2-4 (mild/moderate)
+low-severity (orig):    155/186 valid (83%)    13
+moderate-severity:      116/194 valid (60%)    51
+```
+
+Bins 3-4 in Willis's transition matrix actually favor "unchanged" over
+"decrease" (`[0.07,0.12,0.02]`, `[0.03,0.16,0.02]`). The moderate point's
+history has meaningfully more of its 20 years sitting in those
+intermediate bins, diluting the accumulated evidence. This is the
+pipeline correctly reflecting a real difference in how *consistently*
+each pixel stayed changed over decades, not reacting to peak z-score
+magnitude (which the ±2 bin ceiling makes irrelevant beyond that point
+anyway) - reassuring, face-valid behavior.
+
+## Major finding (2026-07-29): long stable baselines can mask real disturbance
+
+A third point (user-supplied, picked via LandTrendr for a high-magnitude
+disturbance, `-122.0582, 44.4823`) exposed a real structural limitation,
+not a bug. R²=0.62 (the best fit of any test point). Z-scores sit near
+zero for **14 years** (2000-2014), then crash to -6.9 in June 2015 and
+stay between -5 and -10.9 for the following **9 years** - about as
+unambiguous a disturbance signal as this pipeline will ever see.
+
+At the default `dampening_factor=0.5`, the final classification was
+`unchanged=0.9999999999994` - practically certain "no change," despite
+nine years of extreme, sustained contrary evidence. A dampening sweep at
+the same pixel:
+
+```
+d=0.5:  unchanged=0.99999999999936
+d=0.2:  unchanged=0.9997
+d=0.1:  unchanged=0.977   decrease=0.023
+d=0.05: unchanged=0.846   decrease=0.140
+d=0.02: unchanged=0.589   decrease=0.291   increase=0.120
+```
+
+**Mechanism:** Willis's transition matrix's "unchanged" bins (5/6) are
+*more* lopsided (`[0.015, 0.2, 0.01]`, a 13:1 ratio) than its "decrease"
+bin (1) is (`[0.16, 0.11, 0.02]`, only 1.5:1). Under sequential Bayesian
+updating (Cardille & Fortin 2016 Eq. 2), each observation's tilt
+compounds multiplicatively with every prior observation. Fourteen years
+of mild-but-consistent "confirm normal" evidence (~90 observations, each
+tilting hard toward unchanged) built up such a lead that nine years of
+dramatic "this changed" evidence (~130 observations, each tilting only
+mildly toward decrease) can't fully overturn it at `d=0.5` - it takes
+very aggressive dampening (`d≈0.02-0.05`) before "decrease" even becomes
+competitive.
+
+**Why this matters beyond this one pixel:** this is a structural property
+of naive sequential Bayesian updating over long, mostly-stable evidence
+streams, not a fluke of this transition matrix or this pixel. It's
+directly in tension with this project's core modernization goal - "use
+the full Landsat archive (1984-present) as continuous evidence." The
+longer a stable pre-disturbance baseline gets (which using more of the
+archive as evidence directly causes), the harder a genuine later
+disturbance becomes to detect at a fixed dampening factor, because more
+stable years means more compounding "confirm normal" evidence to
+overturn. A pixel with 40 years of stable history before a 2020
+disturbance would face an even steeper climb than this 14-year case.
+
+**Open design question, NOT resolved:** whether/how to address this is a
+real decision, not something to default into silently:
+- Lower the default `dampening_factor` further (tested range above
+  suggests something like 0.05 is needed for competitive detection in a
+  case this stark - but that's a specific number tuned to one pixel and
+  one matrix, not validated broadly).
+- Add a recency-weighting/forgetting mechanism so very old evidence
+  matters less than recent evidence - NOT part of the classic BULC
+  formulation described in Cardille & Fortin (2016) or Willis (2022);
+  this would be a genuine departure from the reconstructed method, not
+  just a parameter tweak.
+- Rebalance the transition matrix's bin 1 vs. bin 5/6 asymmetry so
+  "decrease" evidence tilts as hard, per observation, as "unchanged"
+  evidence does - but that changes the matrix itself, and we don't have
+  the real production matrix to compare against for whether this
+  asymmetry is intentional or an artifact of Willis's one worked example.
+
+None of these have been applied. Flag this prominently before treating
+any BULC-D output over long evidence windows as reliable "no change"
+labeling without checking dampening sensitivity first, the way this
+finding was uncovered.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
