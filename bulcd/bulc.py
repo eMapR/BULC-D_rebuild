@@ -173,10 +173,24 @@ def run_bulc(
         probability_stack = ee.List(accumulator.get("probability_stack"))
         classification_stack = ee.List(accumulator.get("classification_stack"))
 
-        dampened = dampen(ee.Image(image), dampening_factor)
+        source_image = ee.Image(image)
+        dampened = dampen(source_image, dampening_factor)
         posterior = bayes_update(prior, dampened)
         posterior = discount(posterior, recency_factor)
         classification = _argmax_label(posterior)
+
+        # Carry the source Event's date onto both outputs - neither is
+        # otherwise dated, since both are built from arithmetic on `prior`/
+        # `dampened` rather than derived from `source_image` directly. This
+        # is what lets a caller later ask "which year did this pixel's
+        # classification change" (bulcd/interpret.py) instead of only ever
+        # seeing the final accumulated posterior. copyProperties() does NOT
+        # work for this - it only copies non-system properties even when
+        # named explicitly, silently dropping "system:time_start" - .set()
+        # is required for system properties.
+        event_time = source_image.get("system:time_start")
+        posterior = posterior.set("system:time_start", event_time)
+        classification = classification.set("system:time_start", event_time)
 
         return ee.Dictionary(
             {

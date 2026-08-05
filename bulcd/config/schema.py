@@ -104,6 +104,18 @@ class StudyAreaConfig:
     # exposed as a toggle since JRC water data may not suit every AOI.
     mask_water: bool = True
 
+    # Added 2026-07-30: a real disturbance export (cell 2F, year 2025)
+    # showed false "change" above treeline - bare rock/permanent snow-ice
+    # terrain that was never forest, so the forest-tuned harmonic
+    # expectation model doesn't apply there at all (confirmed this isn't
+    # seasonal snow contamination - narrowing the evidence DOY window to
+    # peak summer did NOT remove the artifact). Uses forest_mask_asset if
+    # set, else falls back to the standard public Hansen Global Forest
+    # Change dataset's treecover2000 band (see bulcd/engine.py's
+    # _forest_mask()) - same "standard substitute, not the legacy's real
+    # source" posture as mask_water/_water_mask().
+    mask_non_forest: bool = True
+
 
 @dataclass
 class S2CloudMaskConfig:

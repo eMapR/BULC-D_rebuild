@@ -36,6 +36,15 @@ from bulcd.inputs import organize_inputs, resolve_study_area
 # against a standard public dataset instead. See _water_mask()'s docstring.
 _WATER_OCCURRENCE_THRESHOLD = 50.0
 
+# Hansen Global Forest Change's "treecover2000" band: % canopy cover as of
+# year 2000. 10% is FAO's common minimum-canopy "forest" definition
+# threshold, not a value taken from the legacy source - we don't have
+# mckenzeBULCD.rtf's real forestMask asset either, so this is a standard
+# public substitute, same posture as _water_mask(). See _forest_mask()'s
+# docstring.
+_FOREST_COVER_THRESHOLD = 10.0
+_HANSEN_ASSET_ID = "UMD/hansen/global_forest_change_2025_v1_13"
+
 # Fixed band-order contract with bulc.py (see its module docstring):
 # index 0 = decrease, 1 = unchanged, 2 = increase - matching the legacy
 # caller's finalBulcProbs.select(0/1/2) usage (verified in
@@ -91,6 +100,53 @@ def _water_mask(region: ee.Geometry) -> ee.Image:
     return is_water.Not()
 
 
+def _forest_mask(region: ee.Geometry, forest_mask_asset: str | None) -> ee.Image:
+    """Boolean mask, True where land cover IS forest.
+
+    Legacy equivalent: mckenzeBULCD.rtf's `forestMask` parameter
+    (`StudyAreaConfig.forest_mask_asset`) - if the caller supplied that
+    asset, use it directly (treated as a boolean/binary image: nonzero =
+    forest). Otherwise falls back to the standard public Hansen Global
+    Forest Change dataset's treecover2000 band, thresholded - we don't
+    have the legacy's real forestMask asset, so this is a substitute, same
+    posture as _water_mask(). Added 2026-07-30 after a real disturbance
+    export (cell 2F, year 2025) showed false "change" above treeline -
+    bare rock/permanent snow-ice terrain the forest-tuned harmonic
+    expectation model was never fit to represent. Confirmed this isn't a
+    seasonal snow-contamination issue (narrowing the evidence DOY window
+    to peak summer did not remove the artifact) - it's a land-cover
+    mismatch, which only an actual forest/non-forest mask fixes.
+    """
+    if forest_mask_asset:
+        return ee.Image(forest_mask_asset).clip(region).selfMask().unmask(0).gt(0)
+    tree_cover = ee.Image(_HANSEN_ASSET_ID).select("treecover2000").clip(region)
+    return tree_cover.gte(_FOREST_COVER_THRESHOLD)
+
+
+def study_area_mask(config: BULCDConfig) -> ee.Image | None:
+    """Combined water/non-forest mask per `StudyAreaConfig.mask_water`/
+    `mask_non_forest`, or None if both are off.
+
+    `run_bulcd()` applies this to `final_probabilities` automatically, but
+    `classification_stack`/`probability_stack`/`organize_inputs()`'s
+    `lof_zscore` do NOT go through that step - any caller building an
+    output image directly from those (e.g. bulcd/interpret.py's
+    year_of_change()/zscore_anomaly_mask_for_year()) needs to apply this
+    mask itself. Added 2026-07-30 alongside `mask_non_forest` after
+    scripts/export_year_disturbance_map.py's first real export was found
+    to have neither mask applied - a real gap, not by design.
+    """
+    if not (config.study_area.mask_water or config.study_area.mask_non_forest):
+        return None
+    region = resolve_study_area(config.study_area)
+    mask = ee.Image.constant(1)
+    if config.study_area.mask_water:
+        mask = mask.And(_water_mask(region))
+    if config.study_area.mask_non_forest:
+        mask = mask.And(_forest_mask(region, config.study_area.forest_mask_asset))
+    return mask
+
+
 def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
     """Runs the full BULC-D pipeline: organize_inputs() -> bin + transition
     matrix -> bulc.run_bulc(). Raises ValueError up front if
@@ -115,8 +171,15 @@ def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
     organized = organize_inputs(config)
 
     def _to_update_factors(zscore_image: ee.Image) -> ee.Image:
-        binned = _bin_zscore(ee.Image(zscore_image).select("zscore"), config.bin_cuts)
-        return _bin_to_update_factors(binned, advanced.custom_transition_matrix)
+        zscore_image = ee.Image(zscore_image)
+        binned = _bin_zscore(zscore_image.select("zscore"), config.bin_cuts)
+        update_factors = _bin_to_update_factors(binned, advanced.custom_transition_matrix)
+        # ee.Image.cat() (inside _bin_to_update_factors) doesn't carry
+        # forward zscore_image's system:time_start - none of its inputs
+        # (ee.Image.constant()/.where() chains) are derived from it. Without
+        # this, every downstream bulc.run_bulc() step would be undated (see
+        # CLAUDE.md "Year of change").
+        return update_factors.set("system:time_start", zscore_image.get("system:time_start"))
 
     update_factor_collection = organized.lof_zscore.map(_to_update_factors)
 
@@ -134,10 +197,8 @@ def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
         recency_factor=advanced.recency_factor,
     )
 
-    if config.study_area.mask_water:
-        region = resolve_study_area(config.study_area)
-        result.final_probabilities = result.final_probabilities.updateMask(
-            _water_mask(region)
-        )
+    mask = study_area_mask(config)
+    if mask is not None:
+        result.final_probabilities = result.final_probabilities.updateMask(mask)
 
     return result

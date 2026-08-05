@@ -649,6 +649,263 @@ just because it's now present in the code.
 URL - fetching it requires an authenticated request, see the script's
 own docstring for the pattern used to build one).
 
+## Grid-cell maps (2026-07-30): AOI sourced from the real study-area grid
+
+`scripts/debug_grid_cell_map.py CELL_ID` runs the same disturbance-map
+pipeline as `debug_disturbance_map.py` above, but sources its AOI from
+the actual study-area grid asset instead of a hand-picked box:
+`projects/eastern-cascades-bugnet/assets/clipped_grid_35000m` (a sibling
+GeoTimeSeries-project asset — the route-corridor grid, cells clipped to
+the buffer so they're irregular polygons, not clean squares). Cells are
+selected by their `grid_id` property (row + column-letter, e.g. `"11A"`,
+`"2F"`) — confirmed via `.propertyNames()`/`.toDictionary()` on the
+asset (`row`, `column`, `column_letter`, `grid_id`, `clipped_area_m2`,
+`cell_size_m` are the other fields). The script filters the
+`FeatureCollection` to one feature, pulls its polygon ring via
+`.geometry().getInfo()`, and feeds it through `StudyAreaConfig.aoi_coordinates`
+(the config layer has no "asset + filter" option yet — `resolve_study_area()`'s
+`aoi_asset` path only supports a whole collection's unioned geometry, not
+a single filtered feature — so the filtering happens in the script, not
+`bulcd/inputs.py`).
+
+Sensor/baseline config (L5 2000-2012 + L8 2014-2024, growing-season DOY,
+2000-2003 expectation baseline, Willis NBR12 transition matrix,
+`dampening_factor=0.5` default) is copied as-is from `debug_disturbance_map.py`
+rather than tuned per cell — the 2000-2003 window was originally chosen
+for the B&B Complex Fire's known pre-fire history, and is reused here as
+a generic "earliest available" default since arbitrary grid cells have
+no known disturbance history to tune against. Worth revisiting per-cell
+if a specific cell's baseline years turn out not to be disturbance-free.
+
+First run, cell `2F`: a coherent map, mostly "unchanged" (green) with
+"decrease" (red) clustered in patches rather than scattered noise, and —
+notably — a river visibly cut out as a clean white (masked/nodata) line
+through the middle of the AOI, the clearest visual confirmation yet that
+`_water_mask()` is doing real work along a linear water feature, not just
+isolated ponds like the earlier B&B Complex test.
+
+## Year of change (2026-07-30): querying "disturbance in year Y," and a major lag finding
+
+Everything above answers "what's the current state" (`final_probabilities`)
+or "what's the state as of some cutoff" (truncate the evidence config).
+Neither answers what was actually asked next: "if I say 2025, give me a
+disturbance map for 2025 specifically" - i.e. WHEN, not just whether, a
+pixel changed. This didn't exist in the pipeline at all until now - it's
+the post-run analysis step the legacy calls `afn_interpretBULCDResult`
+(still-missing source, `r-2902-Dev` - see "Legacy source repos" above),
+so everything here is a new reconstruction, not a port.
+
+**Two prerequisite gaps had to be fixed first, both in code that already
+existed:**
+- `bulc.py`'s `run_bulc()` folds `classification_stack`/`probability_stack`
+  from arithmetic on `prior`/`update_factors` - neither ever carried the
+  source Event's date. Fixed by `.set("system:time_start", ...)` in
+  `_step()` - NOT `copyProperties()`, which was tried first and silently
+  no-ops for `system:` properties even when named explicitly in its
+  `properties` argument (only "ordinary" properties are copied; this isn't
+  documented clearly and cost real debugging time).
+- `engine.py`'s `_bin_to_update_factors()` builds each update-factor image
+  via `ee.Image.cat()` over `ee.Image.constant()`/`.where()` chains, none
+  derived from the source z-score image - so even after fixing `bulc.py`,
+  every step was STILL undated until `_to_update_factors()` in
+  `run_bulcd()` also explicitly re-set `system:time_start` from the
+  z-score image onto the resulting update-factor image before it reaches
+  `bulc.run_bulc()`.
+
+**New module: `bulcd/interpret.py`.** `year_of_change(classification_stack,
+target_class_index=0)` returns, per pixel, the calendar year of the
+earliest Event that begins an unbroken run of the target class
+(default: "decrease") lasting through the LAST Event in the stack;
+masked where the pixel doesn't currently sit in that class.
+`disturbance_mask_for_year(classification_stack, year, target_class_index)`
+filters that to one specific year. Implementation note: `ee.Array`-based,
+entirely server-side, no client-side round trip for series length. Two
+non-obvious EE quirks hit along the way, both now commented in the code:
+`ee.ImageCollection.toArray()` produces a 2-D array (image axis x band
+axis) even for a single-band collection - needs `.arrayProject([0])` to
+collapse to a plain 1-D time series; and `ee.Image.arraySlice()` has no
+negative-step reverse, so the detector finds the LAST mismatching index
+via a forward `arrayReduce(max)` trick instead of scanning backward from
+the end. Explicitly does NOT handle "changed, then recovered" - a pixel
+whose persistent run doesn't reach the final Event is masked, identically
+to a pixel that never changed - a real, documented limitation pending the
+actual `afn_interpretBULCDResult` source.
+
+**Validated against the known 2003 B&B Complex Fire point - and this
+surfaced a major finding, not just a confirmation.** At default settings
+(`dampening_factor=0.5`, `recency_factor=1.0`/off), `year_of_change()`
+returned **2015**, not 2003. This was double-checked against the raw
+`classification_stack` sequence directly (dumped every Event's date +
+argmax class at the point) - the algorithm's own argmax classification
+genuinely stays "unchanged" from 2000-06-22 all the way through
+2015-08-19, THEN flips to "decrease" and never reverts. So the detector
+is behaving correctly; the finding is about the algorithm, not a bug:
+
+**Even though the z-score jumps hugely negative within days of the real
+2003 ignition (see "Known-burn validation" above), the running Bayesian
+argmax classification takes 12 YEARS to actually flip**, because each
+step's update factor is dampened toward uniform (`d=0.5`) and the prior
+years of "confirm normal" evidence (even just 3 years, 2000-2002) still
+takes many consecutive negative-z Events to overcome. This is the same
+compounding mechanism as "Major finding: long stable baselines can mask
+real disturbance" above, but demonstrated here on the pipeline's own
+best-validated real-fire test point - and it directly undermines the
+premise of a year-specific query: at default settings, "disturbance in
+year Y" is really answering "when did the algorithm finally admit it,"
+which can lag the true event by over a decade.
+
+`recency_factor` (built earlier for exactly this compounding problem)
+measurably helps, tested at the same point:
+
+| `recency_factor` | detected `year_of_change` |
+|---|---|
+| 1.0 (off) | 2015 |
+| 0.99 | 2009 |
+| 0.98 | 2007 |
+| 0.95 | 2006 |
+
+Monotonically closer to the true 2003 ignition as recency weighting
+increases, but NOT exact even at 0.95 - there is no known setting that
+eliminates this lag, only reduces it. Anyone using
+`disturbance_mask_for_year()` for real analysis needs to know this before
+trusting a specific year's map, especially at the library default
+(`recency_factor=1.0`).
+
+**A second, unrelated limit surfaced trying to render this spatially,
+not just at one point:** `year_of_change()` materializes a full per-pixel
+time-array (~200+ values for a multi-decade config) - much heavier per
+pixel than `final_probabilities`' simple 3-band image. A `getThumbURL`
+preview at `dimensions=512` (fine for `debug_disturbance_map.py`'s
+`final_probabilities`) hit "User memory limit exceeded" for a
+`year_of_change`-based map over the same ~13km test box; `dimensions=128`
+succeeded and showed a coherent, non-random cluster of pixels flipping to
+"decrease" specifically in 2015. This is a synchronous-preview scale
+limit, not a fundamental one - a real full-resolution/full-cell map would
+need an actual batch export (`Export.image.toAsset`/`toDrive` -
+`bulcd/export.py` still doesn't exist), not `getThumbURL`.
+
+`scripts/debug_year_of_change_map.py CELL_ID YEAR [RECENCY_FACTOR]`
+reproduces all of this against a real grid cell (see "Grid-cell maps"
+above for how AOIs are sourced from `clipped_grid_35000m`).
+
+## Two-layer "was this abnormal in year Y" + first real export (2026-07-30)
+
+Follow-up to "Year of change" above, prompted by the user pointing out
+their actual mental model: "flag disturbance if pixels in the target
+image are outside what is normal as defined by the expectation time
+period" - i.e. the raw z-score, not the Bayesian-accumulated
+classification `year_of_change()` reads. Both are real, valid answers to
+"was this pixel abnormal in year Y," at two different layers of the
+pipeline, with a fundamental noise-robustness-vs-lag tradeoff between
+them - see `bulcd/interpret.py`'s module docstring for the split. New:
+`interpret.zscore_anomaly_mask_for_year(zscore_collection, year,
+threshold=-2.0)` - true where ANY image in that calendar year has a
+z-score at or below `threshold` (default matches `bin_cuts`'s own most
+extreme cut), read straight from `organize_inputs()`'s per-image z-score
+stream. No Bayesian accumulation, so no lag - but also no protection
+against a single noisy/cloud-contaminated image, unlike
+`disturbance_mask_for_year()`'s robustness-by-design.
+
+**`bulcd/export.py` now exists** - thin wrapper around
+`ee.batch.Export.image.toAsset()` (starts the task, hands back the
+`ee.batch.Task`, does not poll/block - jobs can take minutes to hours).
+This was the last major documented gap in "Current code state" below
+alongside `interpret.py` (now also real, if partial).
+
+**First real export run**, not a preview: cell `2F`, year 2025, both
+layers combined into one 2-band image (`zscore_anomaly`,
+`bulc_classification`), to `projects/bulcd-python-rebuild/assets/disturbance_2025`
+(`scripts/export_year_disturbance_map.py`). Notes specific to this run:
+- L8's `last_year` had to be bumped to 2026 (from other scripts' 2024) -
+  `_date_bounds()`'s end-year is EXCLUSIVE, so 2025 data requires
+  `last_year=2026`.
+- Sanity-checked before spending the export: 13 evidence images exist for
+  cell 2F in 2025 (non-zero, reasonable), and `zscore_anomaly` alone
+  computes fine at full-cell scale (30m, real `reduceRegion` over the
+  whole ~35km cell) with a non-degenerate split (~37% of the cell flagged
+  anomalous in 2025 at the default threshold) - no evidence of a
+  degenerate all-0/all-1 result before committing to the real export.
+- `bulc_classification` (the `year_of_change()`-based band) still hits
+  "User memory limit exceeded" via any synchronous call
+  (`reduceRegion`/`getThumbURL`) at full-cell scale, even reduced to
+  100m - consistent with the memory-limit finding above, and confirms
+  this band genuinely needs the batch export path (a different compute
+  tier, not subject to the interactive limit) rather than ever being
+  previewable at this scale. Its actual output over the full cell
+  wasn't verified before export - only at a single point and a smaller
+  ~13km test box previously - so treat this run's `bulc_classification`
+  band as unverified at cell-2F scale until the exported asset itself
+  can be inspected.
+- Given 2025 is only ~1 year removed from "now" (2026-07-30) and the
+  validated 12-year lag finding, `bulc_classification` for this specific
+  run is expected to come back mostly or entirely empty/masked - that's
+  expected pipeline behavior given how little post-2025 evidence exists
+  yet, not a bug, per the caveat threaded through this whole feature.
+
+## Non-forest mask (2026-07-30): false "change" above treeline, and DOY narrowing ruled out
+
+Inspecting the real `disturbance_2025` export (above), the user found
+false "change" flagged near mountain tops, above the tree line. First
+hypothesis - the same DOY window used everywhere else was still letting
+in shoulder-season snow (June 1-Sept 30, `152-273`) - was tested by
+narrowing to peak summer (`152-243`, June 1-Aug 31) across the three
+active scripts (`debug_grid_cell_map.py`, `debug_year_of_change_map.py`,
+`export_year_disturbance_map.py` - the earlier validation scripts
+(`debug_bb_complex_fire.py` etc.) were deliberately left at `152-273`
+since their documented CLAUDE.md findings are tied to that exact window).
+**Re-exporting with the narrower window did not fix it** - confirmed by
+the user directly. This ruled out the hypothesis, not just failed to
+help: above-treeline terrain (bare rock, scree, permanent snow/ice) has
+no seasonal window where it resembles the forest the expectation model
+was fit on - narrowing WHEN you look doesn't fix looking at land that was
+never forest in the first place.
+
+**Real cause, found by inspecting the config rather than guessing
+further:** `StudyAreaConfig.forest_mask_asset` has existed as a schema
+field since the project's early scaffold stage (loaded by
+`config/loader.py`) but was NEVER actually wired into `engine.py` - only
+`mask_water`/`_water_mask()` were ever applied. Zero non-forest screening
+existed anywhere in the pipeline until now.
+
+**Fix: `StudyAreaConfig.mask_non_forest: bool = True`** (new field,
+`config/loader.py` updated to parse it) + `engine.py`'s new
+`_forest_mask(region, forest_mask_asset)`: uses `forest_mask_asset` if
+the caller supplied one (treated as a boolean image, nonzero = forest),
+else falls back to the standard public **Hansen Global Forest Change**
+dataset's `treecover2000` band (`UMD/hansen/global_forest_change_2025_v1_13`,
+not the deprecated `_2023_v1_11` - the API warns on that one), thresholded
+at 10% canopy cover (FAO's common minimum-canopy "forest" definition) -
+same "standard substitute, not the legacy's real asset" posture as
+`_water_mask()`/JRC water. Sanity-checked on cell 2F before use: ~28% of
+the cell flagged non-forest, ~72% forest - plausible for a mountainous
+Cascades cell, not degenerate.
+
+**New public helper: `engine.study_area_mask(config)`** - returns the
+combined water+non-forest mask (or `None` if both toggles are off).
+Needed because `run_bulcd()`'s automatic masking only ever touched
+`final_probabilities` - `classification_stack`/`probability_stack`/
+`organize_inputs()`'s `lof_zscore` bypass it entirely. This surfaced a
+second, independent gap while fixing the first: **the `disturbance_2025`
+export had no water masking either**, since
+`zscore_anomaly_mask_for_year()`/`disturbance_mask_for_year()` both read
+those un-masked collections directly, never routing through
+`run_bulcd()`'s masking step. `export_year_disturbance_map.py` now calls
+`engine.study_area_mask(config)` explicitly and applies it to the
+combined 2-band output before export - fixes both the treeline artifact
+and the missing water mask in one change.
+
+Re-exported to `projects/bulcd-python-rebuild/assets/disturbance_2025`
+(same path, asset overwritten) with both masks applied. **Open question,
+not yet resolved:** verifying the two prior export attempts via
+`ee.data.getAsset()`/`listAssets()` reported the asset as not existing
+even though both tasks showed `state: SUCCEEDED` with a valid
+`destination_uris` link, and the user was clearly able to view real
+content from it (that's how the treeline artifact was found in the first
+place). Root cause not identified - flagged here in case it recurs;
+verify new exports directly in the GEE Code Editor rather than relying
+solely on this codebase's own asset-listing calls until this is
+understood.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
@@ -738,7 +995,8 @@ own docstring for the pattern used to build one).
   count doesn't match `bin_cuts`. VERIFIED against real Earth Engine at
   four real test pixels plus one full-AOI map. `scripts/debug_run.py`,
   `scripts/debug_bb_complex_fire.py`, `scripts/debug_long_baseline_disturbance.py`,
-  and `scripts/debug_disturbance_map.py` are the actual runnable entry
+  `scripts/debug_disturbance_map.py`, and `scripts/debug_grid_cell_map.py`
+  (see "Grid-cell maps" below) are the actual runnable entry
   points today — hardcoded test AOIs/configs, cheap preview renders
   (`.getInfo()`/`.getThumbURL()`), not a real CLI (`bulcd/cli.py` doesn't
   exist yet) and not a real export (`bulcd/export.py` doesn't exist
@@ -752,11 +1010,33 @@ own docstring for the pattern used to build one).
   objects directly and therefore need a live, initialized EE session to
   test meaningfully — there's no way to unit-test that arithmetic in pure
   Python without either a live project or a parallel non-EE reference
-  implementation that could drift from the real one. 29 passing tests
+  implementation that could drift from the real one. 32 passing tests
   total across `tests/test_config_loader.py`, `tests/test_inputs.py`,
-  `tests/test_engine.py`.
-- `interpret.py`, `export.py`, `cli.py`, and the `sensors/` submodule
-  from the earlier package-structure draft are still unwritten — see
-  "Legacy source repos and what's still missing" above (`interpret.py`
-  still needs the missing `afn_interpretBULCDResult` source; `export.py`/
-  `cli.py` haven't been started).
+  `tests/test_engine.py` (no dedicated `test_interpret.py` yet - see
+  below).
+- `bulcd/interpret.py` — NEW (2026-07-30), partial: `year_of_change()`/
+  `disturbance_mask_for_year()` (see "Year of change" above) plus
+  `zscore_anomaly_mask_for_year()` (see "Two-layer 'was this abnormal'"
+  above) - a reconstruction, not a port, of the still-missing
+  `afn_interpretBULCDResult`'s "when did it change" question specifically,
+  not its full analysis surface. `year_of_change()`/`disturbance_mask_for_year()`
+  VERIFIED against real Earth Engine at the known B&B Complex Fire point
+  (surfaced a major finding: 12-year detection lag at default settings)
+  and rendered spatially at reduced resolution (128px) over the same test
+  AOI. `zscore_anomaly_mask_for_year()` VERIFIED at full-cell scale (cell
+  2F, 30m, real AOI). No pure-Python-testable logic yet (unlike
+  `organize_inputs()`/`run_bulcd()`'s upfront guards) - every function
+  here builds `ee.Array`/`ee.Image` objects directly, so it needs a live
+  EE session to test at all, same caveat as the rest of the array/image
+  math in this codebase.
+- `bulcd/export.py` — NEW (2026-07-30): `export_image_to_asset()`, a thin
+  wrapper starting (not blocking on) an `ee.batch.Export.image.toAsset()`
+  task. FIRST REAL EXPORT RUN (not a preview) completed the round-trip:
+  cell 2F, year 2025, to `projects/bulcd-python-rebuild/assets/disturbance_2025`
+  via `scripts/export_year_disturbance_map.py` - task queued successfully
+  (see "Two-layer..." above for caveats specific to that run, notably
+  that the `bulc_classification` band's actual full-cell output wasn't
+  verified before export, only at a point and a smaller test box).
+- `cli.py` and the `sensors/` submodule from the earlier package-structure
+  draft are still unwritten — see "Legacy source repos and what's still
+  missing" above.
