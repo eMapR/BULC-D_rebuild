@@ -6,13 +6,18 @@ Google Earth Engine (GEE) JavaScript Code Editor tool.
 
 ## Status
 
-Early implementation, actively in progress (as of 2026-07-29). Config
-handling and continuous-evidence assembly (Landsat 5/7/8/9) are real and
-tested. The Bayesian updating core itself is being written now, against
-a credible published reconstruction of the legacy math — see "Reference
-papers" below — since the original GEE JavaScript source for that core
-still hasn't been obtained. See `CLAUDE.md`'s "Current code state" for
-the exact, up-to-date breakdown of what's real vs. stubbed vs. unverified.
+Actively in progress (as of 2026-08-10). Config handling and
+continuous-evidence assembly (Landsat 5/7/8/9 + Sentinel-2) are real and
+tested. The Bayesian updating core, expectation-model/z-score layer, and
+BULC-D orchestration are implemented against a credible published
+reconstruction of the legacy math — see "Reference papers" below — since
+the original GEE JavaScript source for that core still hasn't been
+obtained, and are validated against real Earth Engine at several known
+disturbance points (including a real, dated wildfire). Post-run
+"when did this change" analysis (`bulcd/interpret.py`) and real GEE
+asset exports (`bulcd/export.py`) also exist now. See `CLAUDE.md`'s
+"Current code state" for the exact, up-to-date breakdown of what's real
+vs. stubbed vs. unverified.
 
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
@@ -47,8 +52,9 @@ reconstruction is an assumption rather than a verified fact.
     area, sensors, temporal window, reduction band, advanced BULC
     tuning (including the transition matrix / dampening factor above),
     and export settings.
-  - `bulcd/inputs.py` — continuous multi-sensor evidence assembly
-    (real, Landsat 5/7/8/9) plus the z-score/expectation-model layer.
+  - `bulcd/inputs.py` — continuous multi-sensor evidence assembly (real,
+    Landsat 5/7/8/9 + Sentinel-2) plus the z-score/expectation-model
+    layer.
   - `bulcd/bulc.py` — the generic, index-agnostic Bayesian updating
     engine (update table → Bayes formula → dampening → posterior), plus
     an optional, off-by-default recency-weighting extension
@@ -56,7 +62,18 @@ reconstruction is an assumption rather than a verified fact.
     "Recency weighting".
   - `bulcd/engine.py` — BULC-D-specific orchestration gluing the above
     two together (bins the z-score stream, looks up the transition
-    matrix, runs the engine).
+    matrix, runs the engine, applies water/non-forest masking).
+  - `bulcd/interpret.py` — post-run "when did this pixel change"
+    analysis: a fast-but-lag-prone Bayesian-classification answer and a
+    fast-and-immediate raw-z-score answer to the same question, both
+    real tradeoffs, not one replacing the other — see CLAUDE.md "Year of
+    change" and "Two-layer 'was this abnormal in year Y'".
+  - `bulcd/export.py` — thin wrapper starting a real
+    `ee.batch.Export.image.toAsset()` task (not a preview render).
+- `configs/` — YAML config files loaded via `bulcd.config.loader.load_config()`.
+  `example.yaml` is a filled-out reference example; other files are
+  real per-run configs (e.g. `cell_8c_comparison.yaml`, built to match
+  a specific legacy-GUI run parameter-for-parameter for validation).
 - `scripts/debug_run.py` — the actual way to run the pipeline today
   (`conda run -n bulcd python scripts/debug_run.py`). Not a real CLI
   (`bulcd/cli.py` doesn't exist yet) - a hardcoded small test AOI/config
@@ -66,10 +83,12 @@ reconstruction is an assumption rather than a verified fact.
   (2003 B&B Complex Fire - the strongest single-pixel validation the
   pipeline has had), `scripts/debug_long_baseline_disturbance.py` (a
   major finding: long stable baselines can mask real disturbance - see
-  CLAUDE.md), and `scripts/debug_disturbance_map.py` (the first full-AOI
-  spatial visualization, not just a single pixel - a coherent,
-  realistic-looking burn scar shape, plus the water-masking artifact/fix
-  described in CLAUDE.md "Disturbance map").
+  CLAUDE.md), `scripts/debug_disturbance_map.py` (the first full-AOI
+  spatial visualization, not just a single pixel), `scripts/debug_grid_cell_map.py`
+  and `scripts/debug_year_of_change_map.py` (same pipeline sourced from
+  the real study-area grid asset instead of a hand-picked box), and
+  `scripts/export_year_disturbance_map.py` (the first real, non-preview
+  GEE asset export).
 - `guiBULCD.rtf` — reference copy of the current production script (the
   ~7,500-line GEE JS GUI tool this rebuild replaces). Not edited in
   place — kept for reference only.

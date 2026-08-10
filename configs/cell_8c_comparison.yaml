@@ -1,0 +1,171 @@
+# Cell 8C: parameter-matched comparison config, legacy GUI (guiBULCD.rtf)
+# vs. this rebuild.
+#
+# Every value below was either (a) confirmed as a GUI default by reading
+# guiBULCD.rtf directly, (b) fetched live from the real study-area grid
+# asset, or (c) left as a placeholder you must fill in by hand. See
+# CLAUDE.md for the full writeup of how each value was sourced - this
+# file doesn't repeat that reasoning, only the conclusions.
+#
+# Real GUI parameters confirmed by the user (2026-08-10), transcribed
+# directly from their actual cell 8C GUI run - not placeholders anymore
+# for evidence/modality/sensitivity:
+#   Cross-Sensors: LS8, LS9, S2
+#   Expectation: year 2024, DOY 74-288, cloud cover threshold 70
+#   Target: year 2025, DOY 74-288, cloud cover threshold 70
+#   Value to track: NBR
+#   (DOY updated 2026-08-10: both expectation and target moved from
+#   1-365 to 74-288 - our schema has one first_doy/last_doy per sensor
+#   covering the whole continuous evidence stream, no separate
+#   expectation-only/target-only DOY field, so this applies uniformly.)
+#   Day step size: 3
+#   Modality: unimodal only (NOT constant+unimodal - differs from the
+#     GUI's own out-of-the-box default found earlier in guiBULCD.rtf;
+#     this run explicitly selected only unimodal)
+#   Sensitivity: numerator multiplier 1, minimum denominator 0.05
+#
+# STILL A PLACEHOLDER - not yet confirmed:
+#   bulc_advanced_params.dampening_factor / custom_transition_matrix.
+#   Run the GUI for cell 8C, expand "Arguments to BULC-D" ->
+#   BULCargumentDictionaryPlus in the Console, and replace both values
+#   below with the real numbers before treating this as fully matched.
+
+schema_version: "1"
+
+study_area:
+  # Fetched live 2026-08-10 via:
+  #   ee.FeatureCollection("projects/eastern-cascades-bugnet/assets/clipped_grid_35000m")
+  #     .filter(ee.Filter.eq("grid_id", "8C")).first().geometry().getInfo()
+  aoi_coordinates:
+    - [-121.73874831706843, 46.41542854445968]
+    - [-121.6293453220673, 46.436501951127106]
+    - [-121.51987266795737, 46.45748901890104]
+    - [-121.41033047131877, 46.47838966176253]
+    - [-121.30071909642608, 46.499203880776555]
+    - [-121.33065449532106, 46.5753759686925]
+    - [-121.36065907221794, 46.65155915180402]
+    - [-121.39073322068826, 46.72775365365402]
+    - [-121.42087709098942, 46.80395961363527]
+    - [-121.53095818658772, 46.78302934523635]
+    - [-121.64096911779635, 46.7620122647017]
+    - [-121.75090969532377, 46.740908396952065]
+    - [-121.86077967620425, 46.71971794748149]
+    - [-121.83016615342095, 46.643629289293024]
+    - [-121.79962326387309, 46.5675516517619]
+    - [-121.76915070345468, 46.49148478087153]
+    - [-121.73874831706843, 46.41542854445968]
+  crs: "EPSG:4326"
+  scale: 30
+  forest_mask_asset: null
+  mask_water: true       # legacy applies afn_waterMask() unconditionally - keep on both sides
+  mask_non_forest: false # legacy has NO forest mask anywhere in guiBULCD.rtf (confirmed by
+                         # grep - zero hits for forest/treecover/hansen/canopy). Off here so
+                         # this rebuild isn't cleaner-above-treeline than the thing it's being
+                         # compared against. Turn back on for real production runs.
+
+evidence:
+  day_step_size: 3  # user's GUI run used 3, not the legacy default of 4
+  # Expectation = baseline year the GUI treated as "normal": 2024 only.
+  # expectation_last_year is EXCLUSIVE (inputs.py builds it as
+  # f"{expectation_last_year}-01-01", same convention as sensor
+  # last_year) - 2025 here means "through end of 2024", not "includes
+  # 2025". Also required to be strictly > first_year by loader.py, so a
+  # single-year baseline can't be written as 2024/2024.
+  expectation_first_year: 2024
+  expectation_last_year: 2025
+  # Target year in the GUI was 2025 (single year, DOY 1-365). Our
+  # continuous-evidence model doesn't have a separate "target" field -
+  # each sensor's evidence window below just needs to EXTEND THROUGH
+  # 2025 so that year's images are in the stream. last_year=2026 because
+  # _date_bounds()'s end-year is EXCLUSIVE (see CLAUDE.md "Two-layer...").
+  # When querying results for "2025 specifically" (interpret.py's
+  # zscore_anomaly_mask_for_year() / disturbance_mask_for_year()), pass
+  # year=2025 explicitly - it's a query parameter at call time, not here.
+  sensors:
+    L8:
+      enabled: true
+      first_year: 2024
+      last_year: 2026
+      first_doy: 74
+      last_doy: 288
+      cloud_cover_threshold: 70
+    L9:
+      enabled: true
+      first_year: 2024
+      last_year: 2026
+      first_doy: 74
+      last_doy: 288
+      cloud_cover_threshold: 70
+    S2:
+      enabled: true
+      first_year: 2024
+      last_year: 2026
+      first_doy: 74
+      last_doy: 288
+      cloud_cover_threshold: 70
+      # s2_cloud_mask sub-params not specified by the user - left at the
+      # legacy example file's defaults (BULCD-InputParameters-v5). S2
+      # evidence assembly is implemented (bulcd/inputs.py, 2026-08-10).
+      s2_cloud_mask:
+        cld_prb_thresh: 50
+        nir_drk_thresh: 0.15
+        cld_prj_dist: 3
+        buffer: 50
+    L5:
+      enabled: false
+    S1:
+      enabled: false
+
+reduction:
+  band: nbr  # "Value to track: NBR" - matches Willis (2022)'s NBR12 transition matrix
+
+modality:
+  # User's actual GUI selection: unimodal ONLY - not constant+unimodal
+  # together (which was the GUI's own out-of-the-box default found
+  # earlier by reading guiBULCD.rtf; this run deliberately chose
+  # differently).
+  constant: false
+  unimodal: true
+  linear: false
+  bimodal: false
+  trimodal: false
+
+sensitivity:
+  # User-confirmed actual GUI values (also happen to match the GUI's
+  # own out-of-the-box default, guiBULCD.rtf line 5952-5954).
+  z_score_numerator_factor: 1
+  z_score_denominator_factor: 0.05
+
+bin_cuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]  # confirmed GUI default, guiBULCD.rtf line 5965
+harmonic_constant: false
+plotting_means: true
+verbose: false
+
+bulc_advanced_params:
+  # PLACEHOLDER - NOT the GUI default. guiBULCD.rtf never defines these;
+  # it pulls them at runtime from getBULCParameterDictionary() (a module
+  # we don't have source for - see CLAUDE.md "Legacy source repos").
+  # Run the GUI for cell 8C, expand "Arguments to BULC-D" ->
+  # BULCargumentDictionaryPlus in the Console, and replace BOTH values
+  # below with the real numbers before treating this as a matched run.
+  dampening_factor: 0.5
+  recency_factor: 1.0  # off - keep off for this comparison; not part of the legacy method at all
+  custom_transition_matrix:
+    # Willis (2022)'s worked NBR12 example - a placeholder, not confirmed
+    # to be what the GUI actually uses for cell 8C.
+    - [0.16, 0.11, 0.02]
+    - [0.14, 0.07, 0.02]
+    - [0.07, 0.12, 0.02]
+    - [0.03, 0.16, 0.02]
+    - [0.015, 0.2, 0.01]
+    - [0.015, 0.195, 0.025]
+    - [0.02, 0.1255, 0.07]
+    - [0.02, 0.07, 0.11]
+    - [0.02, 0.05, 0.12]
+    - [0.02, 0.02, 0.08]
+
+export:
+  destination: asset
+  asset_folder: "projects/bulcd-python-rebuild/assets/"
+  max_pixels: 1000000000000
+  description_prefix: bulcd_cell8c_comparison

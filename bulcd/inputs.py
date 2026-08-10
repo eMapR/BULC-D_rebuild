@@ -12,9 +12,17 @@ REAL, WORKING:
     continuous year range + seasonal day-of-year window, merged into
     one ee.ImageCollection sorted by time. This is the "full archive as
     continuous evidence" piece of the modernization.
+  - Sentinel-2 (added 2026-08-10): `COPERNICUS/S2_SR_HARMONIZED` joined
+    to `COPERNICUS/S2_CLOUD_PROBABILITY` and masked via the standard
+    community s2cloudless recipe (Google's own tutorial -
+    https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless,
+    referenced by S2CloudMaskConfig's docstring) - cloud-probability
+    threshold + NIR dark-pixel shadow projection, not a novel
+    reconstruction. Same DOY/year-range/reduction-band handling as
+    Landsat via the shared `_reduce_band`/`_date_bounds` helpers.
 
 STUBBED, NOT IMPLEMENTED:
-  - Sentinel-1/2, MODIS, ALOS, NICFI, Dynamic World collection assembly
+  - Sentinel-1, MODIS, ALOS, NICFI, Dynamic World collection assembly
     (`assemble_evidence_collection` raises NotImplementedError if one
     of these is enabled in config).
 
@@ -49,6 +57,7 @@ import ee
 from bulcd.config.schema import (
     BULCDConfig,
     ModalityConfig,
+    S2CloudMaskConfig,
     SensitivityConfig,
     SensorEvidenceConfig,
     StudyAreaConfig,
@@ -76,9 +85,17 @@ _LANDSAT_SR_OFFSET = -0.2
 
 # Approximate start of each sensor's usable archive - default lower bound
 # when a sensor's config doesn't set first_year.
-_LANDSAT_LAUNCH_YEAR = {"L5": 1984, "L7": 1999, "L8": 2013, "L9": 2021}
+_SENSOR_LAUNCH_YEAR = {"L5": 1984, "L7": 1999, "L8": 2013, "L9": 2021, "S2": 2015}
 
-_UNIMPLEMENTED_SENSORS = {"S2", "S1", "MO", "AL", "NI", "DW"}
+# Sentinel-2 surface reflectance + its companion per-pixel cloud-probability
+# collection (s2cloudless) - see S2CloudMaskConfig's docstring for the
+# tutorial this cloud-masking recipe follows.
+_S2_SR_COLLECTION_ID = "COPERNICUS/S2_SR_HARMONIZED"
+_S2_CLOUD_PROB_COLLECTION_ID = "COPERNICUS/S2_CLOUD_PROBABILITY"
+_S2_BAND_MAP = {"red": "B4", "nir": "B8", "swir1": "B11", "swir2": "B12"}
+_S2_SR_SCALE = 0.0001  # DN -> reflectance; S2 SR has no additive offset (unlike Landsat C2 L2)
+
+_UNIMPLEMENTED_SENSORS = {"S1", "MO", "AL", "NI", "DW"}
 
 
 def resolve_study_area(study_area: StudyAreaConfig) -> ee.Geometry:
@@ -129,7 +146,7 @@ def _reduce_band(image: ee.Image, band: str, band_map: dict[str, str]) -> ee.Ima
 
 def _date_bounds(sensor_code: str, cfg: SensorEvidenceConfig) -> tuple[str, str]:
     """Resolves a sensor's (possibly open-ended) year range to concrete ISO dates."""
-    first_year = cfg.first_year or _LANDSAT_LAUNCH_YEAR[sensor_code]
+    first_year = cfg.first_year or _SENSOR_LAUNCH_YEAR[sensor_code]
     last_year = cfg.last_year or (datetime.date.today().year + 1)
     return f"{first_year}-01-01", f"{last_year}-01-01"
 
@@ -157,10 +174,92 @@ def _landsat_evidence(
     return collection.map(_process)
 
 
+def _s2_with_cloud_probability(
+    study_area: ee.Geometry, start: str, end: str, cloud_cover_threshold: float
+) -> ee.ImageCollection:
+    """Joins S2 SR imagery to its per-pixel cloud-probability companion
+    collection by `system:index` - the standard s2cloudless join pattern."""
+    sr_collection = (
+        ee.ImageCollection(_S2_SR_COLLECTION_ID)
+        .filterBounds(study_area)
+        .filterDate(start, end)
+        .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_cover_threshold))
+    )
+    cloud_prob_collection = (
+        ee.ImageCollection(_S2_CLOUD_PROB_COLLECTION_ID).filterBounds(study_area).filterDate(start, end)
+    )
+    joined = ee.Join.saveFirst("s2cloudless").apply(
+        primary=sr_collection,
+        secondary=cloud_prob_collection,
+        condition=ee.Filter.equals(leftField="system:index", rightField="system:index"),
+    )
+    return ee.ImageCollection(joined)
+
+
+def _mask_s2_clouds(image: ee.Image, cloud_mask_cfg: S2CloudMaskConfig) -> ee.Image:
+    """Cloud + cloud-shadow mask via s2cloudless probability + a NIR
+    dark-pixel shadow projection - the standard community s2cloudless
+    recipe (see S2CloudMaskConfig's docstring for the tutorial), not a
+    novel reconstruction. Requires `image` to carry the joined
+    's2cloudless' property from `_s2_with_cloud_probability`."""
+    cloud_prob = ee.Image(image.get("s2cloudless")).select("probability")
+    is_cloud = cloud_prob.gt(cloud_mask_cfg.cld_prb_thresh).rename("clouds")
+
+    not_water = image.select("SCL").neq(6)
+    sr_band_scale = 1e4  # unscaled DN range of S2 SR bands, before _scale_s2_sr runs
+    dark_pixels = (
+        image.select("B8")
+        .lt(cloud_mask_cfg.nir_drk_thresh * sr_band_scale)
+        .multiply(not_water)
+        .rename("dark_pixels")
+    )
+    shadow_azimuth = ee.Number(90).subtract(ee.Number(image.get("MEAN_SOLAR_AZIMUTH_ANGLE")))
+    cloud_projection = (
+        is_cloud.directionalDistanceTransform(shadow_azimuth, cloud_mask_cfg.cld_prj_dist * 10)
+        .reproject(crs=image.select(0).projection(), scale=100)
+        .select("distance")
+        .mask()
+        .rename("cloud_transform")
+    )
+    shadows = cloud_projection.multiply(dark_pixels).rename("shadows")
+
+    is_cloud_or_shadow = is_cloud.add(shadows).gt(0)
+    cloud_shadow_mask = (
+        is_cloud_or_shadow.focalMin(2)
+        .focalMax(cloud_mask_cfg.buffer * 2 / 20)
+        .reproject(crs=image.select(0).projection(), scale=20)
+        .rename("cloudmask")
+    )
+    return image.updateMask(cloud_shadow_mask.Not())
+
+
+def _scale_s2_sr(image: ee.Image) -> ee.Image:
+    """Applies the S2 SR DN -> reflectance scale (no additive offset, unlike Landsat)."""
+    optical_bands = image.select("B.*").multiply(_S2_SR_SCALE)
+    return image.addBands(optical_bands, None, True)
+
+
+def _s2_evidence(cfg: SensorEvidenceConfig, study_area: ee.Geometry, band: str) -> ee.ImageCollection:
+    start, end = _date_bounds("S2", cfg)
+    cloud_mask_cfg = cfg.s2_cloud_mask or S2CloudMaskConfig()
+
+    collection = _s2_with_cloud_probability(study_area, start, end, cfg.cloud_cover_threshold).filter(
+        ee.Filter.calendarRange(cfg.first_doy, cfg.last_doy, "day_of_year")
+    )
+
+    def _process(image: ee.Image) -> ee.Image:
+        image = _mask_s2_clouds(image, cloud_mask_cfg)
+        image = _scale_s2_sr(image)
+        reduced = _reduce_band(image, band, _S2_BAND_MAP)
+        return reduced.copyProperties(image, image.propertyNames())
+
+    return collection.map(_process)
+
+
 def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
     """Builds the continuous, multi-sensor, single-band evidence stream.
 
-    Real, working implementation for Landsat 5/7/8/9. Raises
+    Real, working implementation for Landsat 5/7/8/9 and Sentinel-2. Raises
     NotImplementedError for any other enabled sensor (see module docstring).
     """
     study_area = resolve_study_area(config.study_area)
@@ -172,6 +271,8 @@ def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
             continue
         if sensor_code in _LANDSAT_COLLECTION_ID:
             collections.append(_landsat_evidence(sensor_code, sensor_cfg, study_area, band))
+        elif sensor_code == "S2":
+            collections.append(_s2_evidence(sensor_cfg, study_area, band))
         elif sensor_code in _UNIMPLEMENTED_SENSORS:
             raise NotImplementedError(
                 f"Evidence assembly for sensor '{sensor_code}' is not implemented yet "

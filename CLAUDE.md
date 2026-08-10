@@ -906,6 +906,96 @@ verify new exports directly in the GEE Code Editor rather than relying
 solely on this codebase's own asset-listing calls until this is
 understood.
 
+## Legacy-GUI parameter matching + Sentinel-2 support (2026-08-10)
+
+User's plan: run cell 8C through both the legacy GUI (`guiBULCD.rtf`) and
+this rebuild, then compare outputs directly - the first real GUI-vs-rebuild
+validation attempted in this project. Before running anything, worked out
+which parameters could actually be matched, and how.
+
+**Investigated `guiBULCD.rtf` directly** (converted via `textutil -convert
+txt`) rather than guessing at "GUI defaults," since an imagined default
+would have made for a false comparison:
+- The Expectation/Target year checkboxes and DOY textboxes have **no
+  default at all** - every year checkbox is instantiated
+  `ui.Checkbox('20XX', false)` and every DOY field is a blank `ui.Textbox`
+  with only a placeholder. These have to be chosen fresh in the GUI each
+  session and mirrored by hand into the rebuild's config - there was
+  nothing to inherit.
+- `binCuts` **is** hardcoded (`[-2,-1.5,-1,-0.5,0,0.5,1,1.5,2]`, line 5965)
+  - already matches `schema.py`'s default.
+- `modalityDictionary`/`sensitivityDictionary` **do** have real GUI
+  defaults: `{constant:true, unimodal:true}` / `{ZScoreNumeratorFactor:1,
+  ZScoreDenominatorFactor:0.05}` (lines 5935-5954), matching
+  `BULCD-InputParameters-v5`'s real production example too. This exposed
+  a genuine, pre-existing mismatch: `ModalityConfig.unimodal` defaults to
+  `False` in `schema.py`, not `True` - left as-is in the schema (not
+  clearly a bug, just undocumented), but must be overridden per-config
+  for any GUI-matching run.
+- `customTransitionMatrix`/dampening factor are **not in `guiBULCD.rtf` at
+  all** - pulled at runtime from a separate module we still don't have
+  source for (`getBULCParameterDictionary()`,
+  `6003.3c-BULC-AdvancedParameters`, `r-2903-Dev`). But the GUI **prints
+  its fully-resolved argument dictionary to the Console right before
+  calling the algorithm**: `print("Arguments to BULC-D", var_args_BULCD)`
+  (line 7182), where `var_args_BULCD.BULCargumentDictionaryPlus` is
+  exactly that module's real return value. **This is the actual way to
+  get real production dampening/transition-matrix numbers** - run the GUI
+  once, expand that object in the Console - not something to keep
+  guessing at from Willis (2022)'s thesis example.
+- Legacy applies `afn_waterMask()` unconditionally but has **zero
+  forest-mask logic anywhere** in `guiBULCD.rtf` (grepped for
+  forest/treecover/hansen/canopy - no hits). A real asymmetry against
+  this rebuild's `mask_non_forest` (defaults `True`) - disabled per-config
+  for a fair comparison rather than changing the schema default.
+
+**New file: `configs/cell_8c_comparison.yaml`** - the first config file
+actually driving a real run through `load_config()` rather than a
+debug script's hardcoded Python `BULCDConfig(...)` construction (every
+`scripts/debug_*.py` script until now built its config inline). AOI
+fetched live from `clipped_grid_35000m`'s `grid_id="8C"` feature (same
+pattern as "Grid-cell maps" above). Parameters transcribed directly from
+the user's real GUI run: cross-sensor L8+L9+S2, expectation year 2024 /
+target year 2025 (collapsed into one continuous evidence window per
+sensor, `first_year:2024, last_year:2026` - `last_year` is exclusive),
+DOY narrowed from an initial 1-365 to 74-288 (applied uniformly - the
+schema has one DOY window per sensor covering the whole evidence stream,
+no separate expectation-only/target-only split), cloud cover threshold
+70, NBR, `day_step_size:3`, modality **unimodal only** (not
+`constant+unimodal` - a deliberate GUI choice for this run, different
+from the GUI's own out-of-the-box default found above), sensitivity
+`{1, 0.05}`. `bulc_advanced_params.dampening_factor`/
+`custom_transition_matrix` remain Willis-thesis placeholders pending the
+Console readout described above - **not yet a fully parameter-matched
+run** until those are filled in.
+
+**Sentinel-2 support implemented in `bulcd/inputs.py`** - needed because
+the real GUI comparison run enables S2, which previously raised
+`NotImplementedError`. New: `_s2_with_cloud_probability()` (joins
+`COPERNICUS/S2_SR_HARMONIZED` to its `COPERNICUS/S2_CLOUD_PROBABILITY`
+companion collection by `system:index`), `_mask_s2_clouds()` (cloud +
+cloud-shadow mask via cloud-probability threshold + NIR dark-pixel
+shadow projection), `_scale_s2_sr()`, `_s2_evidence()` (mirrors
+`_landsat_evidence()`'s shape). This is the standard community
+s2cloudless recipe (Google's own tutorial, already referenced in
+`S2CloudMaskConfig`'s docstring) - not a novel reconstruction, same
+"standard substitute" posture as the water/forest mask additions above.
+
+VERIFIED against real Earth Engine for cell 8C: evidence assembly returns
+real imagery (352 total L8+L9+S2 images at the final DOY 74-288 window;
+an isolated S2-only pull returned sane NBR values, e.g. 0.69 at one
+sample date/region), and the full `organize_inputs()` harmonic-fit/
+z-score pipeline runs end to end (477-image z-score stream at an earlier
+DOY 1-365 test, one z-score per evidence image as expected - all 32
+existing tests also still pass unchanged). A full-cell `reduceRegion` of
+R2 timed out server-side ("Computation timed out") - consistent with the
+interactive-compute-limit findings already documented for
+`bulc_classification` above, not a defect in the new S2 code; a
+single-point sample at the cell centroid worked fine (R2=0.039 - low,
+plausibly a non-forest/glacier point near Mount Rainier given cell 8C's
+coordinates, not diagnostic of a bug). MODIS/Sentinel-1/ALOS/NICFI/
+Dynamic World remain unimplemented.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
@@ -944,13 +1034,18 @@ understood.
   `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
   example (including a transcription of Willis (2022)'s worked NBR12
   transition matrix, clearly commented as an example, not a shipped
-  default).
+  default). `configs/cell_8c_comparison.yaml` (added 2026-08-10) is the
+  first config actually driving a real run rather than a debug script's
+  hardcoded Python config - see "Legacy-GUI parameter matching" above.
 - `bulcd/inputs.py` — PARTIAL. Real, working: `resolve_study_area()` and
   `assemble_evidence_collection()` (harmonized Landsat 5/7/8/9
   Collection 2 Level 2 SR, QA_PIXEL cloud mask, NBR/SWIR/NDVI reduction,
   per-sensor continuous year range + seasonal DOY filter via
-  `ee.Filter.calendarRange`, merged + `.toFloat()`-cast + time-sorted).
-  Sentinel-1/2, MODIS, ALOS/NICFI/Dynamic World raise
+  `ee.Filter.calendarRange`, merged + `.toFloat()`-cast + time-sorted),
+  PLUS Sentinel-2 (added 2026-08-10 - `COPERNICUS/S2_SR_HARMONIZED` +
+  the standard s2cloudless cloud-probability/shadow-projection recipe,
+  see "Legacy-GUI parameter matching + Sentinel-2 support" above).
+  Sentinel-1, MODIS, ALOS/NICFI/Dynamic World still raise
   `NotImplementedError` if enabled. `organize_inputs()` (the
   expectation-regression/R2/residuals/z-score step) is now IMPLEMENTED
   against the Cardille & Fortin (2016) / Willis (2022) reconstruction
