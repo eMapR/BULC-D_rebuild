@@ -341,15 +341,22 @@ def _select_modality_regressors(modality: ModalityConfig) -> list[str]:
     in order trimodal > bimodal > unimodal > linear > constant.
     """
     if modality.trimodal:
+        # bimodal/trimodal's own first-order term is still "sin" only, no
+        # "cos" - unlike unimodal below, that's NOT yet confirmed against
+        # a real production run (only unimodal's regressor list has been
+        # observed live, see CLAUDE.md "Legacy-GUI parameter matching").
+        # Plausibly the same gap, left alone until actually confirmed.
         return ["constant", "sin", "cos2", "sin2", "cos3", "sin3"]
     if modality.bimodal:
         return ["constant", "sin", "cos2", "sin2"]
     if modality.unimodal:
-        # Willis (2022) eq. 6's simplified 2-term fit - constant + one sine
-        # term outperformed the full 4-term harmonic (constant + linear +
-        # cos + sin) in their testing, so that's what's implemented here
-        # rather than the full eq. 4.
-        return ["constant", "sin"]
+        # CONFIRMED 2026-08-10 against a real GUI run's Console output
+        # (cell 8C - see CLAUDE.md "Legacy-GUI parameter matching"):
+        # production's own printed `harrrmonic names (Optical)` was
+        # ["constant","cos","sin"] - the full first-order harmonic, NOT
+        # Willis (2022) eq. 6's simplified constant+sin-only fit this
+        # used to implement. Live evidence overrides the thesis here.
+        return ["constant", "cos", "sin"]
     if modality.linear:
         return ["constant", "t"]
     # Fallback regardless of modality.constant's own value - a regression
@@ -377,6 +384,7 @@ def _add_harmonic_terms(image: ee.Image) -> ee.Image:
     return (
         image.addBands(ee.Image.constant(1).rename("constant").toFloat())
         .addBands(ee.Image.constant(years_since_epoch).rename("t").toFloat())
+        .addBands(two_pi_t.cos().rename("cos"))
         .addBands(two_pi_t.sin().rename("sin"))
         .addBands(two_pi_t.multiply(2).cos().rename("cos2"))
         .addBands(two_pi_t.multiply(2).sin().rename("sin2"))

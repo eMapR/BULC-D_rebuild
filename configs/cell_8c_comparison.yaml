@@ -24,11 +24,24 @@
 #     this run explicitly selected only unimodal)
 #   Sensitivity: numerator multiplier 1, minimum denominator 0.05
 #
-# STILL A PLACEHOLDER - not yet confirmed:
-#   bulc_advanced_params.dampening_factor / custom_transition_matrix.
-#   Run the GUI for cell 8C, expand "Arguments to BULC-D" ->
-#   BULCargumentDictionaryPlus in the Console, and replace both values
-#   below with the real numbers before treating this as fully matched.
+# Real values pulled 2026-08-10 from the GUI's own Console output
+# (expanded "Arguments to BULC-D" -> BULCargumentDictionaryPlus for the
+# actual cell 8C / DOY 74-288 run):
+#   custom_transition_matrix: REAL, below - confirmed production values,
+#     not Willis (2022)'s thesis placeholder anymore.
+#   dampening_factor: STILL A PLACEHOLDER, and now known to be a
+#     structural mismatch, not just a wrong number. Production doesn't
+#     have one dampening factor - it has THREE separate "leveler"
+#     parameters plus two "minimum" floors:
+#       initializingLeveler: 0.7   transitionLeveler: 0.7
+#       posteriorLeveler: 0.9      transitionMinimum: 0.1
+#                                  posteriorMinimum: 0.0333...
+#     bulc.py's single dampening_factor (Cardille & Fortin 2016's
+#     published formula) can't represent this. Needs
+#     BULC-Minimal-Module-107's real source (r-2909-BULC-Releases,
+#     flagged as needed but not yet fetched since CLAUDE.md's original
+#     scaffold - see "Legacy-GUI parameter matching" 2026-08-10 update)
+#     before guessing at the leveler/minimum formulas - not done yet.
 
 schema_version: "1"
 
@@ -142,27 +155,30 @@ plotting_means: true
 verbose: false
 
 bulc_advanced_params:
-  # PLACEHOLDER - NOT the GUI default. guiBULCD.rtf never defines these;
-  # it pulls them at runtime from getBULCParameterDictionary() (a module
-  # we don't have source for - see CLAUDE.md "Legacy source repos").
-  # Run the GUI for cell 8C, expand "Arguments to BULC-D" ->
-  # BULCargumentDictionaryPlus in the Console, and replace BOTH values
-  # below with the real numbers before treating this as a matched run.
+  # STILL A PLACEHOLDER - see the file header comment above. Production
+  # uses three separate levelers + two minimum floors, not one scalar;
+  # 0.5 here is just bulc.py's current single-parameter model left
+  # unchanged, not a considered value. Do not treat a real run as
+  # matched until BULC-Minimal-Module-107's source clarifies the real
+  # mechanism and bulc.py is updated to match it.
   dampening_factor: 0.5
   recency_factor: 1.0  # off - keep off for this comparison; not part of the legacy method at all
+  # REAL production values, pulled 2026-08-10 from the GUI's Console
+  # (BULCargumentDictionaryPlus.customTransitionMatrix) for cell 8C -
+  # NOT Willis (2022)'s thesis placeholder anymore. Rows sum to ~1
+  # (real conditional probabilities), unlike the thesis's hand-picked
+  # weights. Columns: [P(bin|decrease), P(bin|unchanged), P(bin|increase)].
   custom_transition_matrix:
-    # Willis (2022)'s worked NBR12 example - a placeholder, not confirmed
-    # to be what the GUI actually uses for cell 8C.
-    - [0.16, 0.11, 0.02]
-    - [0.14, 0.07, 0.02]
-    - [0.07, 0.12, 0.02]
-    - [0.03, 0.16, 0.02]
-    - [0.015, 0.2, 0.01]
-    - [0.015, 0.195, 0.025]
-    - [0.02, 0.1255, 0.07]
-    - [0.02, 0.07, 0.11]
-    - [0.02, 0.05, 0.12]
-    - [0.02, 0.02, 0.08]
+    - [0.83, 0.08, 0.08]
+    - [0.66, 0.24, 0.08]
+    - [0.53, 0.37, 0.08]
+    - [0.14, 0.76, 0.08]
+    - [0.08, 0.83, 0.08]
+    - [0.08, 0.83, 0.08]
+    - [0.08, 0.76, 0.14]
+    - [0.08, 0.37, 0.53]
+    - [0.08, 0.24, 0.66]
+    - [0.08, 0.08, 0.83]
 
 export:
   destination: asset

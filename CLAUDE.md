@@ -996,6 +996,76 @@ plausibly a non-forest/glacier point near Mount Rainier given cell 8C's
 coordinates, not diagnostic of a bug). MODIS/Sentinel-1/ALOS/NICFI/
 Dynamic World remain unimplemented.
 
+## Real production BULC-D parameters, read live from the GUI Console (2026-08-10)
+
+Follow-up to the section above. The GUI's Console output turned out to be
+the actual way to get real production values for things that were
+previously only reconstructed from published papers - not just a
+theoretical possibility, but something done for cell 8C this session by
+running the GUI and manually expanding the printed argument objects
+(`print("Arguments to BULC-D", var_args_BULCD)`, `guiBULCD.rtf` line
+7182) in the browser Console, since a plain copy-paste of Console text
+only captures collapsed `Object (N properties)` placeholders, not their
+contents.
+
+**Real `customTransitionMatrix`, now in `configs/cell_8c_comparison.yaml`:**
+```
+[0.83,0.08,0.08]   [0.66,0.24,0.08]   [0.53,0.37,0.08]   [0.14,0.76,0.08]
+[0.08,0.83,0.08]   [0.08,0.83,0.08]   [0.08,0.76,0.14]   [0.08,0.37,0.53]
+[0.08,0.24,0.66]   [0.08,0.08,0.83]
+```
+Genuinely different from Willis (2022)'s thesis worked example that
+every prior test in this project used - and unlike the thesis's
+hand-picked weights, these rows actually sum to ~0.98-0.99 (real
+conditional probabilities). Columns confirmed as
+`[P(bin|decrease), P(bin|unchanged), P(bin|increase)]` by the shape
+(row 0 dominated by column 0, row 9 by column 2, rows 4-5 - the
+"unchanged" bins - both exactly `[0.08,0.83,0.08]`).
+
+**Major finding: dampening is not one scalar in production - it's three
+separate "levelers" plus two "minimum" floors:**
+```
+initializingLeveler: 0.7   transitionLeveler: 0.7   posteriorLeveler: 0.9
+transitionMinimum: 0.1     posteriorMinimum: 0.0333...
+```
+`bulc.py`'s `dampen()` (Cardille & Fortin 2016's published single-`d`
+formula, `dampened = d*raw + (1-d)/n_classes`) can't represent this -
+it's a structural mismatch, not just a wrong number for
+`dampening_factor`. Per this project's own standing rule ("don't guess
+at this math, get the source first" - same discipline already applied to
+`organizeBULCD_Inputs`), the right next step is fetching
+`BULC-Module-Current/BULC-Minimal-Module-107`'s real source
+(`alemlakes/r-2909-BULC-Releases` - already flagged as needed but
+unfetched since this repo's original scaffold, see "Legacy source repos
+and what's still missing") rather than reverse-engineering three
+formulas from one instance's numbers (some numeric patterns are
+tempting - e.g. `transitionMinimum=0.1=1/10 bins`,
+`posteriorMinimum≈transitionMinimum/3` - but that's speculation, not
+reconstruction). **Decided: pause the cell 8C comparison run until that
+source is fetched**, rather than approximate with a single leveler value.
+`bulc_advanced_params.dampening_factor` in `configs/cell_8c_comparison.yaml`
+remains `0.5` - explicitly flagged in the file as unvalidated, not a
+considered choice.
+
+**Confirmed and fixed: unimodal's real regressor set is 3-term, not
+Willis's simplified 2-term.** The same Console output printed
+`harrrmonic names (Optical): ["constant","cos","sin"]` for this run's
+unimodal-only modality selection - the full first-order harmonic
+(constant + cosine + sine), not Willis (2022) eq. 6's simplified
+constant+sine-only fit that `_select_modality_regressors()` implemented
+until now. Fixed in `bulcd/inputs.py`: `_add_harmonic_terms()` was
+missing a first-order `cos` band entirely (it had `cos2`/`cos3` for the
+second/third harmonics but never first-order cosine), added; unimodal's
+regressor list is now `["constant", "cos", "sin"]`. VERIFIED against
+real Earth Engine at the cell 8C centroid: R2 improved from 0.039
+(sin-only) to 0.149 (constant+cos+sin) - a real fit improvement from a
+genuinely missing regressor, not noise. Bimodal/trimodal likely have the
+same first-order gap (their regressor lists still only include `sin`,
+not `cos`, at first order) but this is NOT yet confirmed by any live
+run - left unchanged rather than guessed. Test renamed/updated:
+`test_select_modality_regressors_unimodal_uses_full_first_order_harmonic`
+in `tests/test_inputs.py`; all 32 tests still pass.
+
 ## Environment
 
 - Conda env: `bulcd` (`environment.yml`; python=3.11, pyyaml, pytest,
@@ -1053,7 +1123,11 @@ Dynamic World remain unimplemented.
   source, which we still don't have — every formula choice not given
   explicitly in the papers (modality-priority resolution when multiple
   `ModalityConfig` flags are true, the z-score denominator's stabilizing
-  epsilon) is flagged inline as a documented assumption. Fits a harmonic
+  epsilon) is flagged inline as a documented assumption, EXCEPT
+  unimodal's regressor set, which is no longer an assumption - CONFIRMED
+  2026-08-10 against a real production GUI run's Console output
+  (`["constant","cos","sin"]`, not Willis's simplified 2-term guess -
+  see "Real production BULC-D parameters" below). Fits a harmonic
   regression per pixel over a configurable global baseline window
   (`ee.Reducer.linearRegression`, continuous fractional-year time axis
   rather than day-of-year, so multi-year baselines don't wrap around
@@ -1072,6 +1146,13 @@ Dynamic World remain unimplemented.
   `BULC-Minimal-Module-107`'s counterpart; `afn_BULCD`'s counterpart is
   `engine.py` below) — this module has no idea what a z-score or a burn
   index is, only "update factor" images and a running prior.
+  **Known gap, confirmed 2026-08-10 (see "Real production BULC-D
+  parameters" below): `dampen()`'s single-`d` formula is a structural
+  simplification of production, which uses three separate levelers
+  (`initializingLeveler`/`transitionLeveler`/`posteriorLeveler`) plus two
+  minimum floors, not one scalar.** Not yet reconciled - blocked on
+  fetching `BULC-Minimal-Module-107`'s real source rather than guessing
+  at the formula.
   `BulcResult.probability_stack`/`classification_stack` are
   `ee.ImageCollection` rather than the legacy's single flattened
   multi-band `Image` fields — a deliberate divergence, more directly

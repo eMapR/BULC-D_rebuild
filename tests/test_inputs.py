@@ -57,12 +57,14 @@ def test_select_modality_regressors_bimodal():
     assert _select_modality_regressors(modality) == ["constant", "sin", "cos2", "sin2"]
 
 
-def test_select_modality_regressors_unimodal_uses_simplified_2term_fit():
-    # Willis (2022) eq. 6 - constant + sine only, not the full 4-term
-    # harmonic, matching the legacy's real example (constant + unimodal
-    # both true).
+def test_select_modality_regressors_unimodal_uses_full_first_order_harmonic():
+    # Confirmed 2026-08-10 against a real GUI run's Console output
+    # (production's own `harrrmonic names (Optical)` was
+    # ["constant","cos","sin"]) - overrides the earlier Willis (2022)
+    # eq. 6 simplified-2-term assumption. See CLAUDE.md "Legacy-GUI
+    # parameter matching".
     modality = ModalityConfig(constant=True, unimodal=True)
-    assert _select_modality_regressors(modality) == ["constant", "sin"]
+    assert _select_modality_regressors(modality) == ["constant", "cos", "sin"]
 
 
 def test_select_modality_regressors_linear():

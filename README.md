@@ -19,6 +19,17 @@ asset exports (`bulcd/export.py`) also exist now. See `CLAUDE.md`'s
 "Current code state" for the exact, up-to-date breakdown of what's real
 vs. stubbed vs. unverified.
 
+**In progress: matching this rebuild against a real legacy GUI run**
+(cell 8C, see CLAUDE.md "Legacy-GUI parameter matching" / "Real
+production BULC-D parameters"). Reading the GUI's own Console output
+live has already fixed one confirmed gap (unimodal's harmonic regressor
+set) and surfaced the real production transition matrix, but also found
+that production's dampening mechanism is structurally different from
+this rebuild's single-parameter reconstruction (three separate
+"levelers" plus minimum floors, not one scalar) — the comparison run is
+paused pending `BULC-Minimal-Module-107`'s real source rather than
+guessing at that formula.
+
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
 as a computation graph — this is a client-language choice, not a move off
