@@ -282,13 +282,36 @@ def _build_bulc_advanced_params(section: dict[str, Any]) -> BULCAdvancedParams:
             "0 < recency_factor <= 1 (see bulc.py's discount())"
         )
 
-    known_keys = {"custom_transition_matrix", "dampening_factor", "recency_factor"}
+    posterior_leveler = section.get("posterior_leveler", 1.0)
+    if not (0 < posterior_leveler <= 1):
+        raise ConfigError(
+            f"bulc_advanced_params.posterior_leveler ({posterior_leveler}) must satisfy "
+            "0 < posterior_leveler <= 1 (see bulc.py's run_bulc()/BULC-Minimal-Module-107)"
+        )
+
+    initializing_leveler = section.get("initializing_leveler", 0.0)
+    if not (0 <= initializing_leveler <= 1):
+        raise ConfigError(
+            f"bulc_advanced_params.initializing_leveler ({initializing_leveler}) must satisfy "
+            "0 <= initializing_leveler <= 1 (0 = flat uniform start, this rebuild's prior "
+            "default; see BULCAdvancedParams docstring)"
+        )
+
+    known_keys = {
+        "custom_transition_matrix",
+        "dampening_factor",
+        "recency_factor",
+        "posterior_leveler",
+        "initializing_leveler",
+    }
     raw = {k: v for k, v in section.items() if k not in known_keys}
 
     return BULCAdvancedParams(
         custom_transition_matrix=custom_transition_matrix,
         dampening_factor=dampening_factor,
         recency_factor=recency_factor,
+        posterior_leveler=posterior_leveler,
+        initializing_leveler=initializing_leveler,
         raw=raw,
     )
 

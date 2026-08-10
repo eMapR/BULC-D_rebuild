@@ -1,0 +1,438 @@
+// Updated from 1f with an option for harmonicConstant variable that allows to use the constant ['β0']
+// instead of the ['β0', 'β1'].
+// To use with constant, define var harmonicConstant = true
+var version = "1h5.6"
+print("Harmonic Functions, Version ", version)
+// versions
+// 1h4.1 moving some things to be not images, when they are really constants and the space could be maybe saved.
+// e.g. inversePeriod, twoPiFreq.
+// 1h4.2 split apart the adding harmonics to have more control over adding the time band and a cos2 and cos3 to do it
+// to mimic CCDC.  With chatgpt help to see if this seems parseable. added chatGPT comments too.
+// call tree parsed by chatgpt
+// prompts are:
+// can you make a call tree of the functions in this code
+// can you add javascript comment markers to that call tree. I would like to paste it into my code
+// could you add a notation "(Internal) in front of any functions that are defined inside a function rather than a call to a function outside of that call scope.
+//
+// afn_fitHarmonicToCollection
+// - Calls (Internal): afn_getRMSEandR2
+// afn_applyHarmonicToCollection
+// - No internal function calls
+// afn_addHarmonicBandsViaModalityDictionary
+// - Calls (Internal): afn_addTimeBandUsingPropertyNameToIC
+// - Calls (Internal): afn_addLinearConstantToIC
+// - Calls (Internal): afn_addCosAndSinBandsToIC
+// afn_determineHarmonicIndependentsViaModalityDictionary
+// - No internal function calls
+// afn_addTimeBandUsingPropertyNameToIC
+// - Calls (Internal): afn_addFractionalYearFromPropertyName
+// afn_addLinearConstantToIC
+// - No internal function calls
+// afn_addCosAndSinBandsToIC
+// - Calls (Internal): afn_getCosAndSinForDateGivenAngularFreq
+// afn_addHarmonicIndependentsUsingPropertyNameToIC
+// - Calls (Internal): afn_addFractionalYearFromPropertyName
+// afn_computeFitAndGetCoefficients
+// - No internal function calls
+// afn_applyOldCoefficientsToNewIC
+// - Calls (Internal): afn_multiplyCoeffsByVariables
+// Internal Functions
+// afn_getRMSEandR2
+// afn_addTimeBandUsingPropertyNameToIC
+// afn_addLinearConstantToIC
+// afn_addCosAndSinBandsToIC
+// afn_addFractionalYearFromPropertyName
+// afn_getCosAndSinForDateGivenAngularFreq
+// afn_addFractionalYearFromPropertyName (used in multiple places)
+// afn_multiplyCoeffsByVariables
+var afn_getRMSEandR2 = function(linearTrend, imageCollection, Independents, dependent) {
+    // RMSE stuff pulled from here:
+    // https://gis.stackexchange.com/questions/394741/calculating-r-squared-using-the-residuals-band-from-google-earth-engines-line
+    imageCollection = ee.ImageCollection(imageCollection)
+    // Compute the number of observations in each pixel.
+    var n = ee.ImageCollection(imageCollection).select(dependent).count();
+    // There are n-p degrees of freedom
+    var dof = n.subtract(Independents.length());
+    // Get the root mean square residuals in a pixel.
+    var rmsr = linearTrend.select('residuals')
+        .arrayProject([0])
+        .arrayFlatten([
+            ['rmsr']
+        ]);
+    // Residual sum of squares.
+    var rss = rmsr.pow(2).multiply(n);
+    // Estimated variance = RSS/(n-p).
+    var sSquared = rss.divide(dof);
+    // Sample variance of the dependent variable.
+    var yVariance = imageCollection.select(dependent)
+        .reduce(ee.Reducer.sampleVariance());
+    // Adjusted, squared, multiple regression coefficient.
+    var rSquareAdj = ee.Image(1).subtract(sSquared.divide(yVariance));
+    var theRet = {}
+    theRet.theResiduals = rmsr
+    theRet.theRMSE = rmsr
+    theRet.theR2 = rSquareAdj
+    return (theRet)
+}
+function afn_fitHarmonicToCollection(harmonicIC, trackedBand, harmonicIndependents) {
+    harmonicIC = ee.ImageCollection(harmonicIC)
+    var dependent = ee.String(trackedBand);
+    var harmonicIndependents = ee.List(harmonicIndependents);
+    // Fit the model.
+    var harmonicTrend = harmonicIC
+        .select(harmonicIndependents.add(dependent))
+        // The output of this reducer is a 4x1 array image.
+        .reduce(ee.Reducer.linearRegression(harmonicIndependents.length(),
+            1));
+    //print("999999 the harmonic trend", harmonicTrend)
+    // Turn the array image into a multi-band image of coefficients.
+    var harmonicTrendCoefficients = harmonicTrend.select('coefficients')
+        .arrayProject([0])
+        .arrayFlatten([harmonicIndependents]);
+    var myrmsr = harmonicTrend.select('residuals')
+    // .arrayProject([0])
+    // .arrayFlatten([['rmsr']]);
+    // myrmsr = ee.Image(33)
+    var RMSEandR2 = afn_getRMSEandR2(harmonicTrend, harmonicIC, harmonicIndependents, trackedBand)
+    var theReturn = {}
+    theReturn.harmonicTrendCoefficients = harmonicTrendCoefficients
+    theReturn.theResiduals = RMSEandR2.theResiduals
+    // theReturn.theRMSE = RMSEandR2.theRMSE
+    // theReturn.theRMSE = myrmsr
+    theReturn.theR2 = RMSEandR2.theR2
+    theReturn.harmonicTrendCoefficients = harmonicTrendCoefficients // appears duplicated from earlier line, but leaving it in.
+
+    theReturn.linearTrendObject = harmonicTrend
+
+    // jc added the below on 8/21/25
+    theReturn.numberImages = harmonicIC.size()
+
+    return (theReturn)
+}
+exports.afn_fitHarmonicToCollection = afn_fitHarmonicToCollection;
+function afn_applyHarmonicToCollection(harmonicIC, trackedBand, harmonicIndependents, harmonicTrendCoefficients) {
+    harmonicIC = ee.ImageCollection(harmonicIC)
+    var dependent = ee.String(trackedBand);
+    var harmonicIndependents = ee.List(harmonicIndependents)
+    // Compute fitted values.
+    var fittedHarmonic = harmonicIC.map(function(image) {
+        return image.addBands(
+            image.select(harmonicIndependents)
+            .multiply(harmonicTrendCoefficients)
+            .reduce('sum')
+            .rename('fitted'));
+    });
+    return (fittedHarmonic)
+}
+exports.afn_applyHarmonicToCollection = afn_applyHarmonicToCollection;
+var afn_addHarmonicBandsViaModalityDictionary = function(valueCollection, modalityDictionary) {
+    // assumes the collection begins with a property called fracDOY which represents the portion of a calendar year that this image was from.
+    // every one needs a Time band. Add that.
+    // Now, add the bands specified by the user. These could be a linear band, a cos-sin combo, a second-order cos-sin combo, etc.
+    print("modality dictionary", modalityDictionary)
+    // if any harmonics items are true, add the time and then continue.
+    var vm = modalityDictionary // for convenience of typing
+    if (vm.bimodal || vm.constant || vm.linear || vm.trimodal || vm.unimodal) {
+        var var_args_timeBand = {}
+        var_args_timeBand.dateProperty = 'fracDOY'
+        var_args_timeBand.timeBandName = "t"
+        var reducedCollectionWithHarmonic = afn_addTimeBandUsingPropertyNameToIC(valueCollection, var_args_timeBand)
+        // print("1b2 - with time", reducedCollectionWithHarmonic)
+        if (vm.constant) {
+            var reducedCollectionWithHarmonic = afn_addLinearConstantToIC(reducedCollectionWithHarmonic, 1, "constant")
+            // print("1b3, with constant", reducedCollectionWithHarmonic)
+        }
+        // I think that a second time band is unnecessary. And also it is given the name t_1, which no
+        // other function will be looking for. so, commenting it out-
+        // if (vm.linear) {
+        // var reducedCollectionWithHarmonic = afn_addTimeBandUsingPropertyNameToIC(reducedCollectionWithHarmonic, var_args_timeBand)
+        //     print("1b4, with linear term", reducedCollectionWithHarmonic)
+        // }
+        if (vm.unimodal) {
+            var var_args_harmonicBands = {}
+            var_args_harmonicBands.timeBandName = var_args_timeBand.timeBandName
+            var_args_harmonicBands.nonStandardPeriodBoolean = false
+            var_args_harmonicBands.cosName = "cos"
+            var_args_harmonicBands.sinName = "sin"
+            var reducedCollectionWithHarmonic = afn_addCosAndSinBandsToIC(reducedCollectionWithHarmonic, var_args_harmonicBands)
+            // print("1b5, w sin and cos", reducedCollectionWithHarmonic)
+        }
+        if (vm.bimodal) {
+            var var_args_harmonicBands = {}
+            var_args_harmonicBands.timeBandName = var_args_timeBand.timeBandName
+            var_args_harmonicBands.nonStandardPeriodBoolean = true
+            var_args_harmonicBands.nonStandardPeriodValue = 1
+            var_args_harmonicBands.cosName = "cos2"
+            var_args_harmonicBands.sinName = "sin2"
+            var reducedCollectionWithHarmonic = afn_addCosAndSinBandsToIC(reducedCollectionWithHarmonic, var_args_harmonicBands)
+            // print("1b6, w sin2 and cos2", reducedCollectionWithHarmonic)
+        }
+        if (vm.trimodal) {
+            var var_args_harmonicBands = {}
+            var_args_harmonicBands.timeBandName = var_args_timeBand.timeBandName
+            var_args_harmonicBands.nonStandardPeriodBoolean = true
+            var_args_harmonicBands.nonStandardPeriodValue = 0.667
+            var_args_harmonicBands.cosName = "cos3"
+            var_args_harmonicBands.sinName = "sin3"
+            var reducedCollectionWithHarmonic = afn_addCosAndSinBandsToIC(reducedCollectionWithHarmonic, var_args_harmonicBands)
+            print("1b7, w sin3 and cos3", reducedCollectionWithHarmonic)
+        }
+    }
+    return (reducedCollectionWithHarmonic)
+}
+exports.afn_addHarmonicBandsViaModalityDictionary = afn_addHarmonicBandsViaModalityDictionary
+var afn_determineHarmonicIndependentsViaModalityDictionary = function(modalityDictionary) {
+    // every one needs a Time band. Add that.
+    // Now, add the bands specified by the user. These could be a linear band, a cos-sin combo, a second-order cos-sin combo, etc.
+    print("modality dictionary", modalityDictionary)
+    // if any harmonics items are true, add the time and then continue.
+    var vm = modalityDictionary // for convenience of typing
+    if (vm.constant) {
+        var harmonicList = ee.List(['constant'])
+    }
+    if (vm.linear) {
+        harmonicList = harmonicList.add('t')
+    }
+    if (vm.unimodal) {
+        harmonicList = harmonicList.add('cos').add('sin')
+    }
+    if (vm.bimodal) {
+        harmonicList = harmonicList.add('cos2').add('sin2')
+    }
+    if (vm.trimodal) {
+        harmonicList = harmonicList.add('cos3').add('sin3')
+    }
+    return (harmonicList)
+}
+exports.afn_determineHarmonicIndependentsViaModalityDictionary = afn_determineHarmonicIndependentsViaModalityDictionary
+var afn_addTimeBandUsingPropertyNameToIC = function(anIC, var_args_timeBand) {
+    // just adds a time band to an entire IC for a given property value. each image will have to have that property.
+    // so it might be fracDOY (a number like 0.113 for a day 11% of the way through year;
+    //  or floatDate, a number like 6.113
+    var dateProperty = var_args_timeBand.dateProperty
+    var timeBandName = var_args_timeBand.timeBandName
+    var afn_addFractionalYearFromPropertyName = function(anImage) {
+        // ideas about period can be seen here, for example
+        // http://jwilson.coe.uga.edu/EMAT6680/Dunbar/Assignment1/sine_curves_KD
+        // b is the period of the sine curve
+        // The period of the sine curve is the length of one cycle of the curve.  The natural period of the sine
+        // curve is 2π.  So, a coefficient of b=1 is equivalent to a period of 2π.  To get the period of the sine
+        // curve for any coefficient b, just divide 2π by the coefficient b to get the new period of the curve.
+        var numberForEachPixel = ee.Number(anImage.get(dateProperty));
+        var theTimeBand = ee.Image(numberForEachPixel).rename(timeBandName).float()
+        return anImage
+            .addBands(theTimeBand)
+    }
+    var theICreturn = ee.ImageCollection(anIC).map(afn_addFractionalYearFromPropertyName) //.map(afn_addCosAndSin)
+    return (theICreturn)
+}
+exports.afn_addTimeBandUsingPropertyNameToIC = afn_addTimeBandUsingPropertyNameToIC
+var afn_addLinearConstantToIC = function(anIC, constantValue, constantBandName) {
+    // adds a band with value 1 to every image in the IC. Used for regressions, for the constant term.
+    var addConstantToImg = function(img) {
+        return (img.addBands(ee.Image(constantValue).rename(constantBandName)))
+    }
+    return (anIC.map(addConstantToImg))
+}
+exports.afn_addLinearConstantToIC = afn_addLinearConstantToIC
+var afn_addCosAndSinBandsToIC = function(anIC, var_args_harmonicBands) {
+    // Input parameters
+    // assumes there is a layer with the given name timeBandName.
+    var timeBandName = var_args_harmonicBands.timeBandName
+    var nonStandardPeriodBoolean = var_args_harmonicBands.nonStandardPeriodBoolean
+    var nonStandardPeriodValue = var_args_harmonicBands.nonStandardPeriodValue
+    var cosName = var_args_harmonicBands.cosName
+    var sinName = var_args_harmonicBands.sinName
+    // Distantly derived from harmonics code from Nick's Earth Engine Summit session.
+    // Determine the period
+    if (nonStandardPeriodBoolean) {
+        // BULC-D uses a number that is dayRange / a half year. So e.g., 155/182
+        var period = nonStandardPeriodValue
+        // var period = dayRange.divide(aHalfYear); //<-- 155/182ish
+        // used by BULC-D
+    } else {
+        // standard period is 2.
+        var period = 2 // smaller number is more cycles per a given period
+        // 0.5 means 4 cycles per year
+        // 1 means 2 cycles per year
+        // 2 means 1 cycle per year
+        // 4 means 1/2 cycle per year
+        // a non-round number like 0.9 is somewhere in between.
+    }
+    // Calculate angular frequency
+    var angularFrequency = ee.Number(2).divide(period); //<-- 2*1.174 = 2.3564
+    // Compute time in radians
+    var twoPiFreq = angularFrequency
+        .multiply(2 * Math.PI);
+    // Inner function to calculate cosine and sine factors for an image of a given time and angular frequency.
+    var afn_getCosAndSinForDateGivenAngularFreq = function(anImage) {
+        // ideas about period can be seen here, for example
+        // http://jwilson.coe.uga.edu/EMAT6680/Dunbar/Assignment1/sine_curves_KD
+        // b is the period of the sine curve
+        // The period of the sine curve is the length of one cycle of the curve.  The natural period of the sine
+        // curve is 2π.  So, a coefficient of b=1 is equivalent to a period of 2π.  To get the period of the sine
+        // curve for any coefficient b, just divide 2π by the coefficient b to get the new period of the curve.
+        // Get the specified time band from the image
+        var theTimeBand = ee.Image(anImage).select(timeBandName)
+        // Calculate time in radians
+        var timeRadians = theTimeBand
+            .multiply(twoPiFreq)
+        // Calculate cosine and sine factors and give them the specified names.
+        var theCosFactor = timeRadians.cos().rename(cosName) //cos() * 2πωt --> cos(2πωt)
+        var theSinFactor = timeRadians.sin().rename(sinName) //sin() * 2πωt --> sin(2πωt)
+        // Return the image with additional bands representing cosine and sine factors
+        return anImage
+            .addBands(theCosFactor)
+            .addBands(theSinFactor)
+    }
+    // Apply the inner function to each image in the image collection
+    var theICreturn = ee.ImageCollection(anIC).map(afn_getCosAndSinForDateGivenAngularFreq) //.map(afn_addCosAndSin)
+    // Return the modified image collection
+    return (theICreturn)
+}
+exports.afn_addCosAndSinBandsToIC = afn_addCosAndSinBandsToIC
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+//Command 1. add the time band to expectation collection, target collection
+var afn_addHarmonicIndependentsUsingPropertyNameToIC = function(anIC, theFracDOYProperty, theDayRangeProperty, nonStandardPeriodBoolean, nonStandardPeriodValue) {
+    // OUTDATED as of Nov 2023 bc it is now done piecemeal
+    // Distantly derived from harmonics code from Nick's Earth Engine Summit session.
+    if (nonStandardPeriodBoolean) {
+        // BULC-D uses a number that is dayRange / a half year. So e.g., 155/182
+        var period = nonStandardPeriodValue
+        // var period = dayRange.divide(aHalfYear); //<-- 155/182ish
+        // used by BULC-D
+    } else {
+        // standard period is 2.
+        var period = 2 // smaller number is more cycles per a given period
+        // 0.5 means 4 cycles per year
+        // 1 means 2 cycles per year
+        // 2 means 1 cycle per year
+        // 4 means 1/2 cycle per year
+        // a non-round number like 0.9 is somewhere in between.
+    }
+    var inversePeriod = ee.Number(1).divide(period);
+    var angularFrequency = ee.Number(2).multiply(inversePeriod); //<-- 2*1.174 = 2.3564
+    var angularFrequencyImage = ee.Image(angularFrequency).rename('angularFreq').float();
+    //print(angularFrequency, '502.7-1f: angularFrequency')
+    var twoPiFreq = angularFrequencyImage //should be equal to 2.36 when dayRange is 155days
+        .multiply(2 * Math.PI); //computes time in radians
+    var afn_addFractionalYearFromPropertyName = function(anImage) {
+        // ideas about period can be seen here, for example
+        // http://jwilson.coe.uga.edu/EMAT6680/Dunbar/Assignment1/sine_curves_KD
+        // b is the period of the sine curve
+        // The period of the sine curve is the length of one cycle of the curve.  The natural period of the sine
+        // curve is 2π.  So, a coefficient of b=1 is equivalent to a period of 2π.  To get the period of the sine
+        // curve for any coefficient b, just divide 2π by the coefficient b to get the new period of the curve.
+        // var aWholeYear = ee.Number(365.25);
+        // var aHalfYear = aWholeYear.divide(2); //<-- 182ish days
+        var dayRange = ee.Number(anImage.get(theDayRangeProperty)); // I don't think this is used as of Nov 6 2023.
+        // moved to outside the function
+        // var inversePeriod = ee.Number(1).divide(period);
+        // var angularFrequency = ee.Number(2).multiply(inversePeriod); //<-- 2*1.174 = 2.3564
+        // var angularFrequencyImage = ee.Image(angularFrequency).rename('angularFreq').float();
+        //print(angularFrequency, '502.7-1f: angularFrequency')
+        // end of moved to outside the function
+        var numberForEachPixel = ee.Number(anImage.get(theFracDOYProperty));
+        var theTimeBand = ee.Image(numberForEachPixel).rename('t').float()
+        var timeRadians = theTimeBand //.subtract(120)) // the subtract of 120 seemed logical to do phase
+            // shifting, but turned out to be unnecessary.
+            .multiply(twoPiFreq)
+        // got value from 365.25 / 2 = 182ish
+        // 182ish / 155 days of interest = 1.178
+        // doubling that is 2.36
+        var theCosFactor = timeRadians.cos().rename('cos') //cos() * 2πωt --> cos(2πωt)
+        var theSinFactor = timeRadians.sin().rename('sin') //sin() * 2πωt --> sin(2πωt)
+        var theAngFreq = angularFrequencyImage.rename('angularFreq')
+        var flatRadians = numberForEachPixel.multiply(angularFrequency).multiply(2).multiply(Math.PI)
+        var aCosNumber = flatRadians.cos()
+        anImage = anImage.set("imageCosine", aCosNumber)
+        var aSinNumber = flatRadians.sin()
+        anImage = anImage.set("imageSine", aSinNumber)
+        anImage = anImage.set("imageAngularFrequency", angularFrequency);
+        return anImage
+            .addBands(ee.Image.constant(1))
+            .addBands(theTimeBand)
+            .addBands(theCosFactor)
+            .addBands(theSinFactor)
+        //.addBands(theAngFreq)
+    }
+    var theICreturn = ee.ImageCollection(anIC).map(afn_addFractionalYearFromPropertyName) //.map(afn_addCosAndSin)
+    return (theICreturn)
+};
+exports.afn_addHarmonicIndependentsUsingPropertyNameToIC = afn_addHarmonicIndependentsUsingPropertyNameToIC
+//Command 2. compute a fitted model with variables / get coefficients from expectation collection
+var afn_computeFitAndGetCoefficients = function(anIC, bandNameToFit /*, harmonicConstant*/ , harmonicConstant) {
+    var dependent = bandNameToFit; //GEE doesn't like putting nbr_median as a string...but line 81 needs to add dependent variable to independents
+    var harmonicIndependents = ee.List(['constant', 't', 'cos', 'sin']); //with sin
+    var harmonicIndependentsWithoutCos = ee.List(['constant', 't', 'sin']);
+    var harmonicIndependentsWithoutSin = ee.List(['constant', 't', 'sin']);
+    var harmonicIndependentsWithoutCosAndLinear = ee.List(['constant', 'sin']);
+    var harmonicIndependentsWithoutLinear = ee.List(['constant', 'cos', 'sin']);
+    var harmonicIndependentsWithoutSinAndCos = ee.List(['constant', 't']);
+    var harmonicIndependentsOnlyConstant = ee.List(['constant']); //  ***load this in line 71 for constant trend line in UI (1/3)***
+    //var harmonicBands = anIC.select(['constant', 't', 'cos', 'sin']);// ee.List(['1', 'time', 'cos()', 'sin()']);
+    var harmonicCoefficientNames = ee.List(['β0', 'β1', 'β2', 'β3']);
+    var harmonicCoefficientNamesWithoutCos = ee.List(['β0', 'β1', 'β3']);
+    var harmonicCoefficientNamesWithoutSin = ee.List(['β0', 'β1', 'β2']);
+    var harmonicCoefficientNamesWithoutCosAndLinear = ee.List(['β0', 'β3']);
+    var harmonicCoefficientNamesWithoutLinear = ee.List(['β0', 'β2', 'β3']);
+    var harmonicCoefficientNamesWithoutSinAndCos = ee.List(['β0', 'β1']);
+    var harmonicCoefficientNamesOnlyConstant = ee.List(['β0']); //  ***load this in line 72 for constant trend line in UI (2/3)***
+    var harmonicImagery = ee.ImageCollection(anIC)
+    var independents = harmonicIndependentsWithoutLinear;
+    var coefficients = harmonicCoefficientNamesWithoutLinear;
+    if (harmonicConstant) {
+        var independents = harmonicIndependentsOnlyConstant;
+        var coefficients = harmonicCoefficientNamesOnlyConstant;
+    }
+    // The output of the regression reduction is a 4x1 array image.
+    var harmonicTrend = harmonicImagery
+        .select(independents.add(dependent)) //harmonicIndependents are 'constant', 't', 'cos', 'sin' terms; dependent is bandNameToFit (e.g. NDVI, NBR, etc.)
+        .reduce(ee.Reducer.linearRegression(independents.length(), 1)); //writes linear regression formula (eq. 1)
+    // print(harmonicTrend, 'REGRESSION');
+    // Turn the array image into a multi-band image of coefficients.
+    var harmonicTrendCoefficients = harmonicTrend.select('coefficients') //pull betas
+        .arrayProject([0]) // [[]] --> []
+        .arrayFlatten([coefficients]); // [] --> multi-band image
+    // Map.addLayer(harmonicTrendCoefficients, {}, "1.Harmonic Beta Coefficients"); //view on map, assigns coeffs. by RGB with...
+    //beta 0 --> 'constant'
+    //beta 1 --> 't'
+    //beta 2 --> 'cos'
+    //beta 3 --> 'sin'
+    // print(harmonicTrendCoefficients, '3456.harmonictrendcoeffs');
+    // return the multi-banded coefficients
+    var theRegressionElements = {}
+    theRegressionElements.harmonicTrendCoefficients = harmonicTrendCoefficients // preparing to send a dictionary.
+    return (harmonicTrendCoefficients);
+};
+exports.afn_computeFitAndGetCoefficients = afn_computeFitAndGetCoefficients
+//Command 3. apply coefficients to target collection
+var afn_applyOldCoefficientsToNewIC = function(aSetOfHarmonicCoefficients, aPreparedIC /*, harmonicConstant*/ , harmonicConstant) {
+    var aPreparedIC = ee.ImageCollection(aPreparedIC)
+    //     var dependent = ee.String(bandNameToFit);
+    // distantly derived from harmonics code from Nick's Earth Engine Summit session.
+    var harmonicIndependents = ee.List(['constant', 't', 'cos', 'sin']); // ee.List(['1', 'time', 'cos()', 'sin()']);
+    var harmonicIndependentsWithoutCos = ee.List(['constant', 't', 'sin']);
+    var harmonicIndependentsWithoutSin = ee.List(['constant', 't', 'cos']);
+    var harmonicIndependentsWithoutCosAndLinear = ee.List(['constant', 'sin']);
+    var harmonicIndependentsWithoutLinear = ee.List(['constant', 'cos', 'sin']);
+    var harmonicIndependentsWithoutSinAndCos = ee.List(['constant', 't']);
+    var harmonicIndependentsOnlyConstant = ee.List(['constant']); //  ***load this into line 113 for constant trend line in UI (3/3)***
+    var independents = harmonicIndependentsWithoutLinear;
+    if (harmonicConstant) {
+        var independents = harmonicIndependentsOnlyConstant;
+    }
+    var afn_multiplyCoeffsByVariables = function(anImage) { //compute harmonic for each pixel by multiplying betas by their respective variables (eq. 1)
+        var thefittedHarmonicImage = anImage.addBands( //adds fitted harmonic as band in each image
+            anImage.select(independents) //ee.List(['constant', 't', 'cos', 'sin']);
+            .multiply(aSetOfHarmonicCoefficients)
+            .reduce('sum')
+            .rename('fitted')); //full eq. 1
+        return (thefittedHarmonicImage)
+    };
+    // Compute fitted values.
+    var ICFitted = aPreparedIC.map(afn_multiplyCoeffsByVariables) //map eq. 1 over IC
+    return (ICFitted)
+};
+exports.afn_applyOldCoefficientsToNewIC = afn_applyOldCoefficientsToNewIC

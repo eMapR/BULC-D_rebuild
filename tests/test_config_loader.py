@@ -287,6 +287,34 @@ def test_recency_factor_defaults_to_off(tmp_path):
     assert config.bulc_advanced_params.recency_factor == 1.0
 
 
+def test_posterior_leveler_defaults_to_off(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.bulc_advanced_params.posterior_leveler == 1.0
+
+
+def test_posterior_leveler_must_be_in_valid_range(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  posterior_leveler: 0\n")
+    with pytest.raises(ConfigError, match="posterior_leveler"):
+        load_config(cfg_path)
+
+
+def test_initializing_leveler_defaults_to_flat_uniform(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.bulc_advanced_params.initializing_leveler == 0.0
+
+
+def test_initializing_leveler_must_be_in_valid_range(tmp_path):
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  initializing_leveler: 1.5\n")
+    with pytest.raises(ConfigError, match="initializing_leveler"):
+        load_config(cfg_path)
+
+
 def test_recency_factor_must_be_in_valid_range(tmp_path):
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(MINIMAL_YAML + "bulc_advanced_params:\n  recency_factor: 1.5\n")

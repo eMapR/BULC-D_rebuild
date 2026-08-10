@@ -29,19 +29,22 @@
 # actual cell 8C / DOY 74-288 run):
 #   custom_transition_matrix: REAL, below - confirmed production values,
 #     not Willis (2022)'s thesis placeholder anymore.
-#   dampening_factor: STILL A PLACEHOLDER, and now known to be a
-#     structural mismatch, not just a wrong number. Production doesn't
-#     have one dampening factor - it has THREE separate "leveler"
+#   dampening_factor / posterior_leveler: RESOLVED 2026-08-10. Production
+#     doesn't have one dampening factor - it has THREE separate "leveler"
 #     parameters plus two "minimum" floors:
 #       initializingLeveler: 0.7   transitionLeveler: 0.7
 #       posteriorLeveler: 0.9      transitionMinimum: 0.1
 #                                  posteriorMinimum: 0.0333...
-#     bulc.py's single dampening_factor (Cardille & Fortin 2016's
-#     published formula) can't represent this. Needs
-#     BULC-Minimal-Module-107's real source (r-2909-BULC-Releases,
-#     flagged as needed but not yet fetched since CLAUDE.md's original
-#     scaffold - see "Legacy-GUI parameter matching" 2026-08-10 update)
-#     before guessing at the leveler/minimum formulas - not done yet.
+#     Fetched BULC-Minimal-Module-107's real source (r-2909-BULC-Releases,
+#     legacy/BULC-Minimal-Module-107.txt) and confirmed: transitionLeveler
+#     maps directly onto bulc.py's existing dampening_factor (dampens the
+#     incoming update factors); posteriorLeveler is a SEPARATE step bulc.py
+#     didn't implement at all - dampens the posterior after every Bayes
+#     update. Implemented as a new posterior_leveler parameter (bulc.py's
+#     dampen() reused for both steps). initializingLeveler is still NOT
+#     modeled - it governs one-hot-encoding a real baseLandCoverImage into
+#     a starting prior, which this rebuild has no equivalent of (starts
+#     from flat uniform instead) - a separate, still-open difference.
 
 schema_version: "1"
 
@@ -155,14 +158,35 @@ plotting_means: true
 verbose: false
 
 bulc_advanced_params:
-  # STILL A PLACEHOLDER - see the file header comment above. Production
-  # uses three separate levelers + two minimum floors, not one scalar;
-  # 0.5 here is just bulc.py's current single-parameter model left
-  # unchanged, not a considered value. Do not treat a real run as
-  # matched until BULC-Minimal-Module-107's source clarifies the real
-  # mechanism and bulc.py is updated to match it.
-  dampening_factor: 0.5
-  recency_factor: 1.0  # off - keep off for this comparison; not part of the legacy method at all
+  # REAL production values, confirmed 2026-08-10 against the actual
+  # BULC-Minimal-Module-107 AND 6003.3c-BULC-AdvancedParameters sources
+  # (legacy/BULC-Minimal-Module-107.txt) - no longer placeholders, and no
+  # longer partial. All three of production's real levelers are now
+  # implemented and matched.
+  dampening_factor: 0.7  # = production's transitionLeveler
+  recency_factor: 1.0  # off - not part of the legacy method at all, keep off for this comparison
+  # CONFIRMED against 6003.3c-BULC-AdvancedParameters: production's
+  # baseLandCoverImage = ee.Image(2) ("default is 'nothing has changed'")
+  # - a hardcoded, run-independent constant, one-hot encoded to
+  # "unchanged" and leveled the same way as everything else. Real value:
+  # 0.7, giving a starting prior of [0.1, 0.8, 0.1]
+  # (decrease/unchanged/increase) - not this rebuild's previous flat
+  # [0.333, 0.333, 0.333]. This was the last of the three levelers and
+  # the most likely explanation for the remaining "decrease"-dominant vs.
+  # GUI's "unchanged"-dominant disagreement after the posterior_leveler
+  # fix alone.
+  initializing_leveler: 0.7  # = production's initializingLeveler
+  # NEW 2026-08-10: production applies a SECOND dampening step to the
+  # POSTERIOR after every Bayes update (afn_dayIRebalancingV3), which
+  # bulc.py previously didn't implement at all - see
+  # docs/decisions/0004-dampening-factor-default-0.5.md's "Open gap" and
+  # docs/findings.md "Real production BULC-D parameters". This was very
+  # likely the real cause of the extreme, near-total "decrease"
+  # classification seen in the first cell 8C render (probabilities
+  # differing from 1.0 by 10^-16 to 10^-112) despite near-zero-median
+  # z-scores - unbounded compounding over ~350 sequential steps with no
+  # per-step regularization on the posterior itself.
+  posterior_leveler: 0.9  # = production's posteriorLeveler
   # REAL production values, pulled 2026-08-10 from the GUI's Console
   # (BULCargumentDictionaryPlus.customTransitionMatrix) for cell 8C -
   # NOT Willis (2022)'s thesis placeholder anymore. Rows sum to ~1

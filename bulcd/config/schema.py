@@ -279,6 +279,54 @@ class BULCAdvancedParams:
     # comparison table before choosing a value.
     recency_factor: float = 1.0
 
+    # CONFIRMED 2026-08-10 against the real BULC-Minimal-Module-107 source
+    # (legacy/BULC-Minimal-Module-107.txt, alemlakes/r-2909-BULC-Releases) -
+    # NOT a guess or an extension like recency_factor above. Production
+    # applies a SECOND dampening step to the POSTERIOR after every single
+    # Bayes update (afn_dayIRebalancingV3: posterior*posteriorLeveler +
+    # posteriorMinimum, posteriorMinimum = (1-posteriorLeveler)/n_classes -
+    # same formula shape as dampening_factor above, confirmed by the real
+    # numbers: production's posteriorMinimum (0.0333...) = (1-0.9)/3
+    # exactly). bulc.py previously only dampened the incoming update
+    # factors (matching production's separate transitionLeveler step,
+    # which dampening_factor above already models) and never re-dampened
+    # the posterior - over many sequential steps (~350+ for a 2-year
+    # evidence window), that missing regularization let posteriors
+    # compound toward unbounded, uninterpretable confidence (observed:
+    # probabilities differing from 1.0 by 10^-16 to 10^-112) instead of
+    # staying bounded like production's. Defaults to 1.0 (no-op, exact
+    # prior behavior) until empirically validated against real Earth
+    # Engine and given a considered default via its own docs/decisions/
+    # entry - same rollout discipline as dampening_factor's own history
+    # (see docs/decisions/0004-dampening-factor-default-0.5.md).
+    posterior_leveler: float = 1.0
+
+    # CONFIRMED 2026-08-10 against the real BULC-Advanced-Parameters source
+    # (6003.3c-BULC-AdvancedParameters, alemlakes/r-2903-Dev - the module
+    # that actually SUPPLIES production's transitionLeveler/posteriorLeveler/
+    # customTransitionMatrix, fetched after `afn_BULCD`'s own source showed
+    # it doesn't build baseLandCoverImage itself). Production's starting
+    # prior is NOT flat uniform - `baseLandCoverImage = ee.Image(2)`
+    # ("default is 'nothing has changed'" - a hardcoded constant, not
+    # derived from any AOI/run-specific data, since getBULCParameterDictionary()
+    # takes no arguments at all), one-hot encoded to the "unchanged" class
+    # and leveled by the SAME dampen()-shaped formula as everything else:
+    # one_hot * initializingLeveler + (1-initializingLeveler)/n_classes.
+    # Confirmed real value: 0.7, giving a starting prior of
+    # [0.1, 0.8, 0.1] (decrease/unchanged/increase) - not this rebuild's
+    # previous flat [0.333, 0.333, 0.333].
+    #
+    # Defaults to 0.0, NOT 1.0 like the other levelers above - at leveler=0,
+    # dampen()'s formula collapses to flat uniform regardless of which
+    # class was one-hot-encoded (image*0 + uniform_share), exactly
+    # reproducing this rebuild's prior (pre-2026-08-10) behavior - the
+    # correct "off"/backward-compatible value for THIS parameter, unlike
+    # dampening_factor/posterior_leveler/recency_factor where 1.0 means
+    # "pass real data through unchanged." Range is `0 <= x <= 1`
+    # (inclusive of 0), not `0 < x <= 1` like the other three, for the
+    # same reason.
+    initializing_leveler: float = 0.0
+
     raw: dict = field(default_factory=dict)
 
 

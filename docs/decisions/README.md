@@ -11,6 +11,8 @@ on, and `../../CLAUDE.md` for current stable project state.
 - [0004 — Dampening Factor Default Changed from 1.0 to 0.5](0004-dampening-factor-default-0.5.md)
 - [0005 — Recency Weighting: A Genuine Algorithmic Addition, Off by Default](0005-recency-weighting-extension.md)
 - [0006 — Standard Public Datasets as Water/Forest Mask Substitutes](0006-standard-dataset-masks.md)
+- [0007 — Posterior-Leveler Regularization: A Confirmed Missing Piece of the Real Method](0007-posterior-leveler-regularization.md)
+- [0008 — `dayStepSize` Is a Temporal Binning Window, Not a Sampling Parameter](0008-day-step-size-temporal-binning.md)
 
 New decisions get the next number, `000N-short-title.md`, using the same
 Context/Decision/Consequences shape.

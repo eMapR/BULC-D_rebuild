@@ -112,52 +112,80 @@ deciduous ("Seasonality") — and exports both as GEE assets. This is the
 pattern closest to what a modernized, non-GUI, programmatic BULC-D should
 support.
 
-## Legacy source repos and what's still missing
+## Legacy source repos — most of the core algorithm is now fetched
 
 `legacy/BULCD-Caller-Current.txt` (V52a, newer than `guiBULCD.rtf`'s V53e
 GUI but simpler — no GUI) revealed the algorithm's actual pieces are
-spread across **three separate `alemlakes` GEE repos**, which is a real
-discrepancy in the legacy codebase, not a mistake in our notes:
+spread across **three separate `alemlakes` GEE repos**, plus shared
+library code in `CommonCode2` — a real discrepancy in the legacy
+codebase, not a mistake in our notes. As of 2026-08-10, most of the
+files that matter for the Bayesian core have been fetched (see
+`docs/findings.md` for the full narrative of how each was found and what
+each revealed):
 
-- **`r-2903-Dev`** — the BULC-D/BULC algorithm modules themselves:
-  `afn_organizeBULCD_Inputs` (`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`)
-  and `afn_BULCD` (`6002.B2-BULCD-Module`). **We do not have this source.**
-  This is where the actual regression-fitting / R² / residual / z-score
-  math lives — the real statistical core of BULC-D. Everything in
-  `bulcd/config/` only captures the *parameters* fed into these
-  functions, never their internals. Do not guess at this math; get the
-  source first (same method as the files already in `legacy/`: open in
-  Code Editor, select-all, paste to a `.txt` file).
+- **`r-2903-Dev`** — the BULC-D/BULC algorithm modules. **All fetched**:
+  `afn_organizeBULCD_Inputs` (`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`,
+  `legacy/6002.A2b.3-BULCD-Module-organizeBULCD_Inputs.txt`) and
+  `afn_BULCD` (`6002.B2-BULCD-Module`, `legacy/6002.B2-BULCD-Module.txt`)
+  — confirmed and fixed the z-score denominator/`residual_stddev`
+  formulas (see `bulcd/inputs.py`'s docstring); `6003.3c-BULC-AdvancedParameters`
+  (`getBULCParameterDictionary()`, `legacy/6003.3c-BULC-AdvancedParameters.txt`)
+  — the real source of the transition matrix, all three levelers, and
+  `baseLandCoverImage`.
+- **`CommonCode2`** (shared library, not one of the three
+  `alemlakes`-owned algorithm repos, but where the actual math lives for
+  several pieces) — also fetched: `515-gatherCollections27b`
+  (`515.ImageCollectionFilteringAndGathering/515-gatherCollections27b`,
+  `legacy/515-gatherCollections27b.txt`) — confirmed `dayStepSize` is a
+  temporal binning window (see `docs/decisions/0008`), implemented;
+  `502.7-1h5-HarmonicFunctions` (`/502.7-Harmonics/502.7-1h5-HarmonicFunctions`,
+  `legacy/502.7-1h5-HarmonicFunctions.txt`) — confirmed the
+  modality-resolution logic is additive, not priority-based (CONFIRMED
+  WRONG in `_select_modality_regressors()`, not yet fixed), and the real
+  (adjusted) R² formula.
 - **`r-2909-BULC-Releases`** — the current parameter files:
-  `BULCD-InputParameters-v5` (have it), `BULCD-AdvancedParameters-v5`
-  (**don't have it** — transition matrices / detailed BULC engine
-  outputs, per the caller script's comment), `BULCD-AnalysisParameters-v5`
-  and `BULCD-ExportParameters-v5` (don't have either — post-run
-  thresholding and export band selection). Also has
-  `BULC-Module-Current/BULC-Minimal-Module-107`, the low-level Bayesian
-  updating engine BULC-D wraps — **still not fetched**, and now a
-  confirmed blocker (not just a nice-to-have): production dampening
-  turns out to use three separate "levelers" plus two minimum floors,
-  not the single scalar `bulc.py`'s `dampen()` implements — see
-  `docs/decisions/0004-dampening-factor-default-0.5.md`'s "Open gap" and
-  `docs/findings.md`'s "Real production BULC-D parameters" entry.
+  `BULCD-InputParameters-v5` (have it). `BULCD-AdvancedParameters-v5`/
+  `BULCD-AnalysisParameters-v5`/`BULCD-ExportParameters-v5` themselves
+  still not individually fetched, but `BULCD-AdvancedParameters-v5`'s
+  real content is now effectively known via `6003.3c-BULC-AdvancedParameters`
+  above (the actual function that supplies it). `BULC-Module-Current/BULC-Minimal-Module-107`
+  — fetched 2026-08-10, `legacy/BULC-Minimal-Module-107.txt`. Confirmed
+  production dampening uses three separate "levelers" plus two minimum
+  floors, not one scalar — all three now implemented
+  (`transitionLeveler`/`posteriorLeveler`/`initializingLeveler`, see
+  `docs/decisions/0007`).
 - **`r-2902-Dev`** — `afn_interpretBULCDResult`
-  (`6002.C2-BULCD-Module-analyzeOutputs`), the post-run analysis step
-  (drop/gain probability, "was it ever," change timing). Don't have
-  this source either; matters for `interpret.py`.
+  (`6002.C2-BULCD-Module-analyzeOutputs`,
+  `legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`), the post-run
+  analysis step — **fetched 2026-08-10**. Revealed `interpret.py`'s
+  `year_of_change()` likely uses the wrong definition entirely
+  (production's real "when did it change" is the FIRST threshold
+  crossing, no unbroken-run requirement) — a plausible real explanation
+  for the documented 12-year lag finding. Not yet fixed; still missing
+  `BULCD-AnalysisParameters-v5` for the exact
+  `dropThresholdToDenoteChange`/mean-threshold values this module also
+  depends on.
+
+Still genuinely unfetched: the full `BULCD-AnalysisParameters-v5`/
+`BULCD-ExportParameters-v5` parameter files (post-run thresholding,
+export band selection).
 
 **Bottom line:** config handling and the sensor-data-assembly half of
-`inputs.py` are built with confidence. The expectation-model-fitting /
-z-score half of `inputs.py`, `bulc.py`/`engine.py`, and `interpret.py`
-are implemented against the reconstruction in "Reference papers" below —
+`inputs.py` are built with confidence. `bulc.py`'s core dampening
+mechanism is now confirmed directly against the real
+`BULC-Minimal-Module-107` source (fetched 2026-08-10 — see "Current
+code state" below), not just the paper reconstruction. The
+expectation-model-fitting / z-score half of `inputs.py`, `engine.py`'s
+binning/transition-matrix logic, and `interpret.py` are still
+implemented against the "Reference papers" reconstruction below —
 published, citable descriptions of the actual method, not a guess from
 field names — but are **not** a substitute for the real
-`organizeBULCD_Inputs`/`BULC-Minimal-Module-107` source if exact
-production behavior ever needs to match bit-for-bit (precise bin
-cut-points, the *shipped* default transition matrix, the real
-three-leveler dampening formula). See "Current code state" below for
-exactly what's implemented vs. still assumption-flagged vs. confirmed
-against live Earth Engine or the real GUI Console output.
+`organizeBULCD_Inputs` source (still missing) if exact production
+behavior ever needs to match bit-for-bit (precise bin cut-points, the
+`initializingLeveler`/`baseLandCoverImage` starting-prior mechanism).
+See "Current code state" below for exactly what's implemented vs. still
+assumption-flagged vs. confirmed against live Earth Engine or the real
+GUI Console output.
 
 ## Reference papers — real math for the Bayesian core
 
@@ -165,8 +193,9 @@ Two papers (see "Contents") together cover both layers of BULC-D that
 would otherwise be unwritten stubs given the missing source above:
 
 **Cardille & Fortin 2016 (the original BULC paper)** describes the
-low-level Bayesian engine BULC-D wraps (likely corresponds to the
-still-unfetched `BULC-Minimal-Module-107`) — this is `bulc.py`/`engine.py`
+low-level Bayesian engine BULC-D wraps (confirmed to correspond to
+`BULC-Minimal-Module-107`, fetched 2026-08-10 — see "Current code
+state") — this is `bulc.py`/`engine.py`
 territory:
 - An **"update table"** is built between consecutive classified images
   ("Events") by cross-tabulating Event *i* against Event *i+1* like a
@@ -381,41 +410,78 @@ useful context that isn't obvious from the field names alone:
   s2cloudless cloud-probability/shadow-projection recipe — see
   `docs/findings.md`'s "Legacy-GUI parameter matching + Sentinel-2
   support" entry). Sentinel-1, MODIS, ALOS/NICFI/Dynamic World still
-  raise `NotImplementedError` if enabled. `organize_inputs()` (the
-  expectation-regression/R2/residuals/z-score step) is IMPLEMENTED
-  against the Cardille & Fortin (2016) / Willis (2022) reconstruction
-  (see "Reference papers" above), not the real `organizeBULCD_Inputs`
-  source, which we still don't have — every formula choice not given
-  explicitly in the papers (modality-priority resolution when multiple
-  `ModalityConfig` flags are true, the z-score denominator's stabilizing
-  epsilon) is flagged inline as a documented assumption, EXCEPT
-  unimodal's regressor set, which is CONFIRMED against real production
-  GUI Console output (`["constant","cos","sin"]`). Fits a harmonic
-  regression per pixel over a configurable global baseline window
-  (`ee.Reducer.linearRegression`, continuous fractional-year time axis
-  rather than day-of-year, so multi-year baselines don't wrap around
-  at year boundaries), then scores the *entire* evidence stream
-  (baseline included, as a sanity check) into a continuous z-score
-  `ee.ImageCollection`. VERIFIED against real Earth Engine at a single
-  test pixel and at cell 8C — not a substitute for broader validation
-  across more pixels/AOIs/conditions.
+  raise `NotImplementedError` if enabled. `day_step_size` is now REAL
+  (2026-08-10, see `docs/decisions/0008`): its source
+  (`afn_gatherCollectionsAndReduce`) confirmed it's a temporal
+  binning/aggregation window, not a sampling parameter — production
+  medians together every image from every enabled sensor landing in each
+  `day_step_size`-day bin into exactly ONE "Event," not one Event per raw
+  image. `_evidence_date_and_doy_bounds()`/`_bin_evidence_by_day_step()`
+  implement this (via `ee.Join.saveAll()` — a naive per-bin
+  `.filterDate()` inside `.map()` hit "User memory limit exceeded" even
+  for a single-point query). VALIDATED: the first of four confirmed
+  fixes in this investigation that actually moved the classification
+  (not just left it unchanged) — `unchanged` roughly tripled at 2 of 3
+  test points. `organize_inputs()` (the expectation-regression/R2/
+  residuals/z-score step) — its real source (`organizeBULCD_Inputs`) was
+  fetched 2026-08-10 (see `docs/findings.md` "initializing_leveler, real
+  organizeBULCD_Inputs source, z-score fixes"). CONFIRMED and fixed
+  against it: `_zscore_image()`'s denominator is
+  `max(residual_stddev, denominator_factor)` clamped to `[-10, 10]` (not
+  an additive epsilon); `residual_stddev` is a plain `n-1` sample
+  standard deviation of residuals (not a regression
+  residual-standard-error). Also confirmed: the legacy's discrete
+  expectation/target split is real in production, and this rebuild's
+  continuous full-stream scoring is a deliberate, confirmed divergence
+  (see `docs/decisions/0003`), not a gap to close. Modality-priority
+  resolution CONFIRMED WRONG, not yet fixed: the real source
+  (`502.7-1h5-HarmonicFunctions`, fetched 2026-08-10) shows production is
+  ADDITIVE (every true `ModalityConfig` flag's terms concatenate), not
+  "richest shape wins" like `_select_modality_regressors()` currently
+  implements — doesn't affect cell 8C's numbers (only `unimodal` is
+  relevant there) but is a real bug for multi-flag configs, queued as a
+  follow-up. R2's exact formula also CONFIRMED DIFFERENT (production
+  computes adjusted R2, dof-corrected; this rebuild computes plain
+  `1 - SS_res/SS_tot`) — diagnostic-only, doesn't feed the Bayesian
+  engine, lower priority. Fits a harmonic regression per pixel over a
+  configurable global baseline window (`ee.Reducer.linearRegression`,
+  continuous fractional-year time axis rather than day-of-year, so
+  multi-year baselines don't wrap around at year boundaries), then
+  scores the *entire* evidence stream (baseline included, as a sanity
+  check) into a continuous z-score `ee.ImageCollection`. VERIFIED against
+  real Earth Engine at a single test pixel and at cell 8C — not a
+  substitute for broader validation across more pixels/AOIs/conditions.
 - `bulcd/bulc.py` — NEW, real code: the generic, index/sensor-agnostic
   Bayesian updating engine (`dampen()`, `bayes_update()`, `run_bulc()`),
   a direct implementation of Cardille & Fortin (2016) Eq. 1/2 and its
   dampening factor, PLUS `discount()` — a `recency_factor` extension
   (see `docs/decisions/0005-recency-weighting-extension.md`), off by
-  default. Mirrors the legacy's actual module split (this is the
-  still-unfetched `BULC-Minimal-Module-107`'s counterpart; `afn_BULCD`'s
-  counterpart is `engine.py` below) — this module has no idea what a
-  z-score or a burn index is, only "update factor" images and a running
-  prior. **Known gap: `dampen()`'s single-`d` formula is a structural
-  simplification of production, which uses three separate levelers
-  (`initializingLeveler`/`transitionLeveler`/`posteriorLeveler`) plus two
-  minimum floors, not one scalar** — see
-  `docs/decisions/0004-dampening-factor-default-0.5.md`'s "Open gap".
-  Not yet reconciled — blocked on fetching `BULC-Minimal-Module-107`'s
-  real source rather than guessing at the formula.
-  `BulcResult.probability_stack`/`classification_stack` are
+  default. Mirrors the legacy's actual module split — this is
+  `BULC-Minimal-Module-107`'s counterpart (source now obtained, saved to
+  `legacy/BULC-Minimal-Module-107.txt`); `afn_BULCD`'s counterpart is
+  `engine.py` below. `dampen()` is now reused for TWO steps, matching the
+  real source exactly (confirmed 2026-08-10, see
+  `docs/decisions/0007-posterior-leveler-regularization.md`): dampening
+  the incoming update factors (`dampening_factor`, matches production's
+  `transitionLeveler`) AND a second, separate dampening of the posterior
+  after every Bayes update (new `posterior_leveler` parameter, matches
+  production's `posteriorLeveler`) — the latter was completely missing
+  before and confirmed to be the cause of a real runaway-overconfidence
+  bug found via a live GUI-vs-rebuild comparison (probabilities at the
+  edge of float64 precision). `posterior_leveler` defaults to `1.0`
+  (no-op) pending a considered default, same rollout as
+  `dampening_factor`'s own history. `initializingLeveler`/
+  `baseLandCoverImage` also now CONFIRMED and implemented (engine.py
+  below) — production's real value is a hardcoded, run-independent
+  constant (`ee.Image(2)`, "default is 'nothing has changed'"), not a
+  real per-AOI land-cover classification. VALIDATED but with a
+  surprising null result: at `posterior_leveler=0.9`, any single step's
+  influence (including the initial prior) decays by `~0.9^N` per
+  subsequent step — for a ~350-step sequence that's washed out almost
+  immediately, so `initializing_leveler` provably cannot move the final
+  classification for evidence windows this long. See
+  `docs/findings.md`'s "initializing_leveler, real organizeBULCD_Inputs
+  source, z-score fixes" entry. `BulcResult.probability_stack`/`classification_stack` are
   `ee.ImageCollection` rather than the legacy's single flattened
   multi-band `Image` fields — a deliberate divergence, more directly
   useful for "expose intermediate probability/uncertainty surfaces"
@@ -478,7 +544,7 @@ useful context that isn't obvious from the field names alone:
   objects directly and therefore need a live, initialized EE session to
   test meaningfully — there's no way to unit-test that arithmetic in pure
   Python without either a live project or a parallel non-EE reference
-  implementation that could drift from the real one. 32 passing tests
+  implementation that could drift from the real one. 36 passing tests
   total across `tests/test_config_loader.py`, `tests/test_inputs.py`,
   `tests/test_engine.py` (no dedicated `test_interpret.py` yet — same
   live-EE-session caveat applies).

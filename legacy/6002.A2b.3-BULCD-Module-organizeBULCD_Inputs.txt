@@ -1,0 +1,530 @@
+var version = "6002.A2b.3"
+// Here is an excellent summary of the code, from Gemini V1.5, on May 13 2024.
+// Here's a breakdown of the code's key functionalities:
+// 1. Module Imports: The code imports several modules for:
+//    - Harmonic Functions: These modules (harmonicFunctionsModule) likely handle fitting and applying harmonic regressions to time series data, possibly to model seasonal trends.
+//    - Image Collection Gathering and Reduction: This module (afn_gatherCollectionsAndReduce) is used to collect and process image collections based on provided parameters.
+// 2. afn_organizeBULCD_Inputs Function: This is the core function that orchestrates the input preparation process. It takes a dictionary of arguments (var_args) containing parameters for the expectation and target collections, study area, band of interest, and various flags.
+// 3. Key Steps Within the Function:
+//    Gathering and Summarizing Data:
+//      It uses afn_gatherCollectionsAndReduce to retrieve the expectation and target image collections.
+//      It calculates summary statistics for each collection, including the mean, standard deviation, and Median Absolute Deviation (MAD), possibly for defining baselines and quantifying deviations.
+//      Optionally, it adds harmonic bands to the collections using afn_addHarmonicBandsViaModalityDictionary.
+//    Harmonic Regression:
+//      It fits a harmonic regression to the expectation collection using afn_fitHarmonicToCollection to model its trend over time.
+//      It applies the fitted harmonic model to both the expectation and target collections using afn_applyHarmonicToCollection to estimate expected values.
+//    Calculating Lack of Fit:
+//      It calculates the difference between the observed and fitted values for the target collection using afn_differenceObservedVSFitted, essentially capturing how much the target deviates from the expectation.
+
+// note this needs to be fixed and also the comment changed.
+//      It normalizes the lack of fit by dividing it by the expectation standard deviation, potentially creating a Z-score-like metric.
+//    Returning Results: The function returns a dictionary containing the processed target and expectation collections, the normalized lack of fit, the fitted values, various summary statistics, and the fitted harmonic model coefficients.
+// 4. Output: This processed data serves as input for the downstream BULC-D algorithm, which will use it to analyze the difference between the expectation and target.
+// //=======================================================================================================
+// //=======================================================================================================
+// /*
+//           SECTION 0. Requires
+// */
+// //=======================================================================================================
+var harmonicFunctionsModule = require("users/alemlakes/CommonCode2:/502.7-Harmonics/502.7-1h5-HarmonicFunctions");
+var afn_addHarmonicBandsViaModalityDictionary = harmonicFunctionsModule.afn_addHarmonicBandsViaModalityDictionary
+var afn_determineHarmonicIndependentsViaModalityDictionary = harmonicFunctionsModule.afn_determineHarmonicIndependentsViaModalityDictionary
+var afn_fitHarmonicToCollection = harmonicFunctionsModule.afn_fitHarmonicToCollection
+var afn_applyHarmonicToCollection = harmonicFunctionsModule.afn_applyHarmonicToCollection
+var gatheringCollectionsModule = require('users/alemlakes/CommonCode2:515.ImageCollectionFilteringAndGathering/515-gatherCollections27b')
+var afn_gatherCollectionsAndReduce = gatheringCollectionsModule.afn_gatherCollectionsAndReduce;
+var afn_checkForSAR = gatheringCollectionsModule.afn_checkForSAR;
+var afn_checkForOptical = gatheringCollectionsModule.afn_checkForOptical;
+function afn_gatheringArgsParking(gatheringCollections_args) {
+/* * This function creates a deep copy of the arguments passed in the `gatheringCollections_args` object.
+ * It's necessary because JavaScript's assignment operator (x = y) performs a shallow copy, meaning
+ * changes to nested objects in the copy will also affect the original. To avoid this, we
+ * serialize and then re-parse each property, creating a truly independent copy.
+ *
+ * @param {object} gatheringCollections_args - The object containing the arguments to be copied.
+ * @returns {object} - A deep copy of the input arguments.
+ */
+
+    // Create an empty object to store the copied arguments.
+    var parkedArgs = {};
+    // Copy each property by serializing and then re-parsing it. This creates a deep copy.
+    parkedArgs.bandNameToFit = JSON.parse(JSON.stringify(gatheringCollections_args.bandNameToFit));
+    parkedArgs.bandName_reduction = JSON.parse(JSON.stringify(gatheringCollections_args.bandName_reduction));
+    parkedArgs.binCuts = JSON.parse(JSON.stringify(gatheringCollections_args.binCuts));
+    parkedArgs.centeringZoom = JSON.parse(JSON.stringify(gatheringCollections_args.centeringZoom));
+    parkedArgs.expectationCollectionParameters = JSON.parse(JSON.stringify(gatheringCollections_args.expectationCollectionParameters));
+    parkedArgs.modalityDictionary = JSON.parse(JSON.stringify(gatheringCollections_args.modalityDictionary));
+    parkedArgs.plottingMeans = JSON.parse(JSON.stringify(gatheringCollections_args.plottingMeans));
+    parkedArgs.targetCollectionParameters = JSON.parse(JSON.stringify(gatheringCollections_args.targetCollectionParameters));
+    parkedArgs.verbose = JSON.parse(JSON.stringify(gatheringCollections_args.verbose));
+    parkedArgs.whichReduction = JSON.parse(JSON.stringify(gatheringCollections_args.whichReduction));
+    // The `defaultStudyArea` property is a special server object, so we can't stringify it.
+    // Instead, we directly assign it to the copied object.
+    parkedArgs.expectationCollectionParameters.defaultStudyArea = gatheringCollections_args.expectationCollectionParameters.defaultStudyArea;
+    parkedArgs.targetCollectionParameters.defaultStudyArea = gatheringCollections_args.targetCollectionParameters.defaultStudyArea;
+    // Return the copied object.
+    return (parkedArgs);
+}
+function afn_getFirstOrSecondOrAverageValuesAcrossMB(img1, img2) {
+    var img1HasValue = img1.mask()
+    var img1Masked = img1.mask().not()
+    // Map.addLayer(img1HasValue, {}, "img1HasValue")
+    // Map.addLayer(img1Masked, {}, "img1Masked")
+    var img2HasValue = img2.mask()
+    var img2Masked = img2.mask().not()
+    // Map.addLayer(img2HasValue, {}, "img2HasValue")
+    // Map.addLayer(img2Masked, {}, "img2Masked")
+    var thesum = img1.add(img2).divide(2)
+    // Map.addLayer(thesum, {}, "sum")
+    var firstOr0 = img1.unmask()
+    // Map.addLayer(firstOr0, {}, "firstOr0")
+    var secOr0 = img2.unmask()
+    // Map.addLayer(secOr0, {}, "secOr0")
+    var sumOr0 = thesum.unmask()
+    // Map.addLayer(sumOr0, {}, "sumOr0")
+    var sumOr0 = thesum.unmask()
+    // Map.addLayer(sumOr0, {}, "sumOr0")
+    var sumorfirstorsecond = sumOr0.add(firstOr0).add(secOr0)
+    // Map.addLayer(sumorfirstorsecond, {}, "sumorfirstorsecond")
+    var theAns = sumOr0.where(sumOr0.eq(0), firstOr0.add(secOr0))
+    // Map.addLayer(theAns, {}, "the Answer")
+    var theCombinedStream = theAns.updateMask(theAns.neq(0))
+    // Map.addLayer(theCombinedStream, {}, "theCombinedStream")
+    return (theCombinedStream)
+}
+function afn_blendOpticalAndSARStreams(opticalStream, SARStream) {
+  // this function will blend parts of the Optical and SAR streams.
+  // Each stream has the following:
+  //       expectationCollection, // 1. ImageCollection. Gathered and processed expectation collection.
+  //       expectationYearRegressionObject, // 2. Object. Object containing details about the fitted harmonic regression model to expectation data.
+  //       aCoefficientSetExpectationYear, // 3. Image. Coefficients of the fitted harmonic model (expectation).
+  //       theExpectationR2, // 5. Image. R-squared value of the fitted harmonic model (expectation).
+  //       expectCollectionFit, // 6. ImageCollection. The expectation collection with the fitted harmonic model applied.
+  //       expectationResiduals, // observed - fitted for expectation
+  //       expectationPeriodSummaryValue, // 7. Image. Summary statistic for the expectation period.
+  //       expectationPeriodSD, // 8. Image. Standard deviation of the expectation period.
+  //       expectationPeriodMAD, // 10. Image. Median Absolute Deviation of the expectation period.
+  //       targetCollection, // 11. ImageCollection. The gathered and processed target image collection.
+  //       targetCollectionFit, // 12. ImageCollection. The target collection with the fitted harmonic model applied.
+  //       targetResiduals, // observed - fitted for target
+  //       targetCollectionLackOfFit, // 13. Multi-band Image. The difference between target and fitted values.
+  //       targetLOFAsZScore, // 14.  Multi-band Image. The normalized lack of fit of the target collection (Z-scores) calculated using residual standard deviation.
+  //       targetPeriodSummaryValue // 15. Image. Summary statistic for the target period.
+// not many of these can be blended across the stream types. So we'll default to showing only the results of the optical data, for many of them.
+// mostly focused on blending the targetLOFAsZScore.
+var blendedBULCDStream = {}
+blendedBULCDStream.expectationCollection = opticalStream.expectationCollection
+blendedBULCDStream.expectationYearRegressionObject = opticalStream.expectationYearRegressionObject
+blendedBULCDStream.aCoefficientSetExpectationYear = opticalStream.aCoefficientSetExpectationYear
+blendedBULCDStream.theExpectationR2 = opticalStream.theExpectationR2
+blendedBULCDStream.expectCollectionFit = opticalStream.expectCollectionFit
+blendedBULCDStream.expectationResiduals = opticalStream.expectationResiduals
+blendedBULCDStream.expectationPeriodSummaryValue = opticalStream.expectationPeriodSummaryValue
+blendedBULCDStream.expectationPeriodSD = opticalStream.expectationPeriodSD
+blendedBULCDStream.expectationPeriodMAD = opticalStream.expectationPeriodMAD
+blendedBULCDStream.targetCollection = opticalStream.targetCollection
+blendedBULCDStream.targetCollectionFit = opticalStream.targetCollectionFit
+blendedBULCDStream.targetResiduals = opticalStream.targetResiduals
+blendedBULCDStream.targetCollectionLackOfFit = opticalStream.targetCollectionLackOfFit
+blendedBULCDStream.targetLOFAsZScore =  afn_getFirstOrSecondOrAverageValuesAcrossMB(opticalStream.targetLOFAsZScore, SARStream.targetLOFAsZScore)
+blendedBULCDStream.targetPeriodSummaryValue = opticalStream.targetPeriodSummaryValue
+print("blendedBULCDStream", blendedBULCDStream)
+return(blendedBULCDStream)
+    }
+
+
+function afn_organizeBULCD_Inputs(var_args) {
+    // Here is an excellent summary of the code, from Gemini V1.5, on May 13 2024.
+    // This function orchestrates the preparation of inputs for the BULC-D algorithm.
+    // It takes parameters for expectation and target image collections, the study area,
+    // the band of interest, and various flags. It gathers and summarizes the data, fits
+    // a harmonic regression to the expectation collection, applies the fitted model to both
+    // collections, calculates the lack of fit of the target collection, and returns a
+    // dictionary containing the processed data, summary statistics, and model coefficients.
+    // The output is used as input for the BULC-D algorithm to analyze differences between
+    // the expectation and target time series.
+    //=======================================================================================================
+    print("var_args in afn_organizeBULCD_Inputs", var_args)
+    function afn_createExpAndTargetStream(var_args) {
+        print("var_args in afn_createExpAndTargetStream", var_args)
+        if (verbose) {
+            print("Organizing BULC-D inputs, version: " + version)
+            print("Arguments", var_args)
+        }
+        // ----------------------------------------------------------------------------
+        // INPUT PARAMETERS
+        // ----------------------------------------------------------------------------
+        var expectationCollectionParameters = var_args.expectationCollectionParameters;
+        var targetCollectionParameters = var_args.targetCollectionParameters;
+        var defaultStudyArea = var_args.defaultStudyArea;
+        var bandNameToFit = var_args.bandNameToFit
+        var bandnameToFitCount = bandNameToFit + "_count"
+        var verbose = var_args.verbose
+        var ZScoreNumeratorFactor = var_args.sensitivityDictionary.ZScoreNumeratorFactor
+        var ZScoreDenominatorFactor = var_args.sensitivityDictionary.ZScoreDenominatorFactor
+        // ----------------------------------------------------------------------------
+        // FLAGS
+        // ----------------------------------------------------------------------------
+        var plottingMeans = var_args.plottingMeans /// when true, estimated prior NBR mean and target NBR mean are added to the map
+        /// Are we using harmonic models to create a trend?
+        var harmonicConstant = var_args.harmonicConstant;
+        function afn_summarizeICSimply(aCollection, defaultStudyArea, summarizeICArgs) {
+            // Here is an excellent summary of the code, from Gemini V1.5, on May 13 2024.
+            // Calculates simple summary statistics for an image collection.
+            // Takes an image collection, the study area, and a dictionary of arguments
+            // specifying the summarization method ("LastNonNull" or "StdDev").
+            // Returns an image containing the calculated summary statistic for the specified band.
+            // Used for generating baseline values and measures of dispersion for the BULC-D analysis.
+            //=======================================================================================================
+            // print("yaya", aCollection)
+            var summarizationMethod = summarizeICArgs.summarizationMethod
+            // print("summarizationMethod", summarizationMethod)
+            if (summarizationMethod === "LastNonNull") {
+                var summaryStatistic1 = ee.Image(aCollection.select(bandNameToFit).reduce(ee.Reducer.lastNonNull())).rename('ICPeriodSummaryValue');
+                // var expPeriodCount = aCollection.reduce(ee.Reducer.count()).clip(defaultStudyArea).select(bandnameToFitCount);
+                // var expPeriodMean = ee.Image(0.4).clip(defaultStudyArea).where(expPeriodCount.gt(2), ee.Image(aCollection.select(bandNameToFit).reduce(ee.Reducer.mean()))).rename('expPeriodMean');
+                // var expEstSD = ee.Image(0.05).clip(defaultStudyArea).where(expPeriodCount.gt(2), ee.Image(aCollection.select(bandNameToFit).reduce(ee.Reducer.sampleStdDev())));
+                return (summaryStatistic1)
+            }
+            if (summarizationMethod === "StdDev") {
+                // print("summarizationMethod", summarizationMethod)
+                var summaryStatistic2 = ee.Image(aCollection.select(0).reduce(ee.Reducer.sampleStdDev()).rename('EstSDofIC'));
+                return (summaryStatistic2)
+            }
+        }
+        exports.afn_summarizeICSimply = afn_summarizeICSimply
+        // function afn_differenceObservedVSFittedOLD(aCollection, targetBandName, fittedBandName) {
+        //     // Here is an excellent summary of the code, from Gemini V1.5, on May 13 2024.
+        //     //  (OLD VERSION - LIKELY NOT IN USE)
+        //     // Calculates the difference between observed and fitted values for each image
+        //     // in an image collection, assuming both values are present as bands in each image.
+        //     // It converts the image collection to a multi-band image for processing.
+        //     // Returns a multi-band image where each band represents the difference for a specific time step.
+        //     //=======================================================================================================
+        //     // IF the image collection contains both the target band name and the fitted name,
+        //     // it subtracts those two from each other. Does it by flipping the whole IC to a multi-banded
+        //     // image. Then selects those items. then subtracts them. Is this efficient? Probably not, but
+        //     // it gets the job done.
+        //     // Justin Braaten has this approach on Stack Exchange:
+        //     // https://gis.stackexchange.com/questions/342582/finding-difference-of-two-google-earth-engine-imagecollections
+        //     if (verbose) {
+        //         print("aCollection in afn_differenceObservedVSFitted", aCollection)
+        //     }
+        //     var theAnswer = ee.Image()
+        //     var theMB = ee.Image(aCollection.iterate(iterateConvertImageCollectionToImage, theAnswer))
+        //     // // Get the Probability layers and put them in their own image.
+        //     var theLayerMatchKey = ".*" + targetBandName + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        //     var allMatchedLayersAsMultiBand = theMB.select(theLayerMatchKey)
+        //     var allObservedValues = allMatchedLayersAsMultiBand
+        //     // // Get the Probability layers and put them in their own image.
+        //     var theLayerMatchKey = ".*" + fittedBandName + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        //     var allMatchedLayersAsMultiBand = theMB.select(theLayerMatchKey)
+        //     var allFittedValues = allMatchedLayersAsMultiBand
+        //     var theLackOfFitMB = allObservedValues.subtract(allFittedValues)
+        //     return (theLackOfFitMB)
+        // }
+        function afn_differenceObservedVSFitted(aCollection, targetBandName, fittedBandName) {
+            // Here is an excellent summary of the code, from Gemini V1.5, on May 13 2024.
+            //=======================================================================================================
+            // Calculates the difference between observed and fitted values for an image collection,
+            // assuming both values are present as bands within each image.
+            // Processes the image collection using a map function to subtract the fitted values
+            // from the observed values for each image.
+            // Returns a multi-band image where each band represents the difference for a specific time step.
+            // Assuming the IC contains both the target band name and the fitted name,
+            // it subtracts those two from each other. Does it by with a simple .map call,
+            // then subtracting, then casting the IC to bands (since that is what is expected by the
+            // calling function.
+            // Note that this replaces an earlier version that had a somewhat more complex approach.
+            if (verbose) {
+                print("aCollection in afn_differenceObservedVSFitted", aCollection);
+            }
+            var subtractedCollection = ee.ImageCollection(aCollection).map(function(oneImage) {
+                return oneImage.select(targetBandName).subtract(oneImage.select(fittedBandName))
+                    .copyProperties(oneImage, ['system:time_start']);
+            });
+            return subtractedCollection.toBands();
+        }
+        // //=======================================================================================================
+        // /*
+        //           SECTION 2. IMAGE COLLECTION CONSTRUCTION
+        // */
+        // //=======================================================================================================
+        //////////////////////////////////////////
+        ////// Expectation Collection ////
+        //////////////////////////////////////////
+        print("Now gathering an Expectation-period collection...")
+        var expectationCollection = afn_gatherCollectionsAndReduce(expectationCollectionParameters)
+        if (verbose) {
+            print('13a.expectation collection (Optical)', expectationCollection)
+        }
+        // expectationCollection = expectationCollection.sort("nominalDOY") // for when we are merging across years for the fitting.
+        // if (verbose) {
+        //     print('13b.expectation collection after sorting', expectationCollection)
+        // }
+        // that gathering happens without any harmonic terms being put added to the IC. Let's add those terms on here.
+        // pre-dec 2023 here in next 3 lines. can delete in say Feb 2024
+        // var expectationCollectionold = afn_addHarmonicIndependentsUsingPropertyNameToIC(expectationCollection, 'fracDOY', 'dayRange');
+        // print('13c1.expectation collection with harmonics', expectationCollectionold)
+        // Map.addLayer(expectationCollectionold, {}, "13c1.reduced expectation CollectionWithHarmonic", false, 1)
+        // ////////////////////////////////////
+        // //// Section x. Add the harmonic bands requested by the user. Set up the images based on those parameters
+        // ////////////////////////////////////
+        var harmonicIndependents = afn_determineHarmonicIndependentsViaModalityDictionary(var_args.modalityDictionary)
+        print("harrrmonic names (Optical)", harmonicIndependents)
+        var expectationCollection = afn_addHarmonicBandsViaModalityDictionary(expectationCollection, var_args.modalityDictionary)
+        //var_args.harmonicIndependentNames = harmonicIndependents
+        print('13c2.expectation collection (Optical) with harmonics', expectationCollection)
+        Map.addLayer(expectationCollection, {}, "13c2.reduced expectation Collection (Optical) With Harmonic", false, 1)
+        var expectationYearRegression = afn_fitHarmonicToCollection(expectationCollection, bandNameToFit, harmonicIndependents)
+        var aCoefficientSetExpectationYear = expectationYearRegression.harmonicTrendCoefficients
+        var theExpectationR2 = expectationYearRegression.theR2
+        var expectationYearRegressionObject = expectationYearRegression.linearTrendObject
+        if (verbose) {
+            Map.addLayer(aCoefficientSetExpectationYear, {}, "13f2.aCoefficientSetExpectationYear")
+        }
+        var expectCollectionFit = afn_applyHarmonicToCollection(expectationCollection, bandNameToFit, harmonicIndependents, aCoefficientSetExpectationYear)
+        // calculate the residuals of that fit. Maybe should be inside that function, but fix that later if desired.
+        var expectationResiduals = expectCollectionFit.map(function(image) {
+            return (image.select([bandNameToFit]).subtract(image.select(['fitted']))
+                .rename('expectationDifferenceOptical')).copyProperties(image, ['system:time_start']);
+        });
+        var expectationResidualsAbs = expectationResiduals.map(function(image) {
+            return (image.abs()
+                .rename('expectationDifferenceOpticalAbsValue')).copyProperties(image, ['system:time_start']);
+        });
+        // Compute some simple summary characteristics of the images for the expectation year
+        var summarizeICArgs = {
+            summarizationMethod: "LastNonNull"
+        }
+        var theSummarizedIC = ee.Image(afn_summarizeICSimply(expectationCollection, defaultStudyArea, summarizeICArgs))
+        var expectationPeriodSummaryValue = ee.Image(theSummarizedIC)
+        var summarizeICArgs = {
+            summarizationMethod: "StdDev"
+        }
+
+
+        var expectationPeriodSD = ee.Image(afn_summarizeICSimply(expectationResiduals, defaultStudyArea, summarizeICArgs))
+        // the Median Absolute Deviation may be a better estimate of how far away *from the expection* is a given value.
+        // That could be better than what I've been using as the StdDev, which responds only to the span of the values,
+        // and not how much deviation from what I expect there is. If I have a sine wave with points only very
+        // slightly off the wave, that should be a small 'deviance' from the expectation. And that is regardless of
+        // the std dev of the actual values themselves, which is what I've been using as the measure of dispersion
+        // to cut into bins. so I'll compute and return the expectationPeriodMAD.
+        // subtraction from Noel from https://gis.stackexchange.com/questions/414514/subtracting-image-by-image-from-two-image-collections
+        // var expectationPeriodDeviationsIC = expectCollectionFit
+        //     .map(function(img) {
+        //         return img.select(0).addBands(img.select(1)).addBands(img.select(0).subtract(img.select(1)).abs())
+        //             .copyProperties(img, ['system:time_start']);
+        //     })
+        var expectationPeriodMAD = expectationResidualsAbs.median()
+        if (plottingMeans) {
+            // putting this require inside the if, because it is not always needed
+            var afn_waterMask = require('users/alemlakes/CommonCode:/513.waterMask/513-waterMask').afn_waterMask;
+            var theWaterMask = afn_waterMask().not()
+            Map.addLayer(expectationPeriodSummaryValue.updateMask(theWaterMask), {
+                min: 0,
+                max: 0.8
+            }, "1. Estimated Prior Mean ", false)
+            Map.addLayer(expectationCollection.select(0), {
+                min: 0,
+                max: 0.8
+            }, "1b. Expectation Collection ", false)
+        }
+        //////////////////////////////////////////
+        ////// Target Collection ////
+        //////////////////////////////////////////
+        print("Now gathering a Target-period collection...")
+        var targetCollection = afn_gatherCollectionsAndReduce(targetCollectionParameters)
+
+        if (verbose) {
+            print("3d.targetCollection 1&2&3", targetCollection)
+        }
+        // Add harmonic bands to the target collection using the specified modality dictionary.
+        // These bands (representing time-related variables) will be used to predict expected values
+        // based on the harmonic model fitted to the expectation data.
+        var targetCollection = afn_addHarmonicBandsViaModalityDictionary(targetCollection, var_args.modalityDictionary)
+        // Apply the harmonic model that was fitted to the EXPECTATION data to the TARGET collection.
+        // This predicts values for the target period based on the expected pattern, using only
+        // the time-related variables (analogous to being "x" values) from the target collection. The observed
+        // target values (analogous to "y" values) are NOT used in this step.
+        var targetCollectionFit = afn_applyHarmonicToCollection(targetCollection, bandNameToFit, harmonicIndependents, aCoefficientSetExpectationYear)
+        // calculate the residuals of that fit. Maybe should be inside that function, but fix that later if desired
+        // Calculate residuals (observed - fitted) for target data.
+        var targetResiduals = targetCollectionFit.map(function(image) {
+            return (image.select([bandNameToFit]).subtract(image.select(['fitted']))
+                .rename('targetDifference')).copyProperties(image, ['system:time_start']);
+        });
+        // targetResiduals = targetResiduals.toBands() // to match what is needed, ie dividing.
+        print("Computed targetResiduals in target", targetResiduals)
+        // another (not quite working?) calculation of fit
+        // Calculate the lack of fit between observed and fitted target values.
+        var targetCollectionLackOfFit = afn_differenceObservedVSFitted(targetCollectionFit, bandNameToFit, "fitted")
+        if (verbose) {
+            print("Computed LackOfFit in target", targetCollectionLackOfFit)
+        }
+
+
+        var rescaledResiduals =  ee.Image(targetCollectionLackOfFit).multiply(ZScoreNumeratorFactor)
+        // Normalize lack of fit using SD of the residuals (imitating a Z-score).
+        var targetLOFAsZScore = rescaledResiduals
+                                  .divide(ee.Image(expectationPeriodSD).max(ZScoreDenominatorFactor))
+                                  .max(-10).min(10);
+          print("Using z-score numerator and denominator factors:")
+          print(ZScoreNumeratorFactor)
+          print(ZScoreDenominatorFactor)
+        if(verbose){
+        }
+        // Compute some simple summary characteristics of the images for the target year
+        // Summarize target data using "LastNonNull" method.
+        var summarizeICArgs = {
+            summarizationMethod: "LastNonNull"
+        }
+        var theSummarizedIC = ee.Image(afn_summarizeICSimply(targetCollection, defaultStudyArea, summarizeICArgs))
+        var targetPeriodSummaryValue = ee.Image(theSummarizedIC)
+        // var targetPeriodSummaryValue = ee.Image(targetCollection.select(bandNameToFit).reduce(ee.Reducer.mean()));
+        // var targetPeriodCount = targetCollection.reduce(ee.Reducer.count()).clip(defaultStudyArea).select(bandnameToFitCount);
+        // var targetPeriodSummaryValue = ee.Image(0.4).clip(defaultStudyArea).where(targetPeriodCount.gt(2), ee.Image(targetCollection.select(bandNameToFit).reduce(ee.Reducer.mean())));
+        // var targetPeriodSD = ee.Image(0.05).clip(defaultStudyArea).where(targetPeriodCount.gt(2), ee.Image(targetCollection.select(bandNameToFit).reduce(ee.Reducer
+        //     .sampleStdDev())));
+        // var theQuickCV = targetPeriodSD.divide(targetPeriodSummaryValue).rename(['CoeffVar'])
+        // Plot target period mean and target collection if flag is set.
+        if (plottingMeans) {
+            // putting this require inside the if, because it is not always needed
+            var afn_waterMask = require('users/alemlakes/CommonCode:/513.waterMask/513-waterMask').afn_waterMask;
+            var theWaterMask = afn_waterMask().not()
+            Map.addLayer(targetPeriodSummaryValue.updateMask(theWaterMask), {
+                min: 0,
+                max: 0.8
+            }, "2. Target period mean ", false)
+            Map.addLayer(targetCollection.select(0), {
+                min: 0,
+                max: 0.8
+            }, "2b. Target Collection ", false)
+        }
+        // Invert Z-score if the band of interest is SWIR (Shortwave Infrared).
+        if (bandNameToFit === "SWIR") {
+            targetLOFAsZScore = targetLOFAsZScore.multiply(-1)
+        }
+        if(var_args.expectationCollectionParameters.datasetSelection.AL){
+          targetLOFAsZScore = targetLOFAsZScore.multiply(-1)
+        }
+        // ----------------------------------------------------------------------------
+        // RETURN PROCESSED DATA AND SUMMARY STATISTICS FOR EITHER OPTICAL OR SAR STREAM
+        // ----------------------------------------------------------------------------
+        // Package and return the processed data, summary statistics, and harmonic
+        // regression results in a dictionary for use in the BULC-D algorithm.
+        return {
+            // commentary from Gemini. truly amazing.
+            expectationCollection: expectationCollection, // 1. ImageCollection. Gathered and processed expectation collection.
+            expectationYearRegressionObject: expectationYearRegressionObject, // 2. Object. Object containing details about the fitted harmonic regression model to expectation data.
+            aCoefficientSetExpectationYear: aCoefficientSetExpectationYear, // 3. Image. Coefficients of the fitted harmonic model (expectation).
+            // theExpectationResiduals: theExpectationResiduals, // 4. ImageCollection. Image collection of residuals from the fitted harmonic model (expectation).
+            theExpectationR2: theExpectationR2, // 5. Image. R-squared value of the fitted harmonic model (expectation).
+            expectCollectionFit: expectCollectionFit, // 6. ImageCollection. The expectation collection with the fitted harmonic model applied.
+            expectationResiduals: expectationResiduals, // observed - fitted for expectation
+            expectationPeriodSummaryValue: expectationPeriodSummaryValue, // 7. Image. Summary statistic for the expectation period.
+            expectationPeriodSD: expectationPeriodSD, // 8. Image. Standard deviation of the expectation period.
+            // expectationPeriodDeviationsIC: expectationPeriodDeviationsIC, // not checked closely. better to use expectationresiduals instead. ImageCollection. Image collection of deviations from the fitted model for the expectation period.
+            //                                                               // Three bands: Observed, Expected, Difference Between Them.
+            expectationPeriodMAD: expectationPeriodMAD, // 10. Image. Median Absolute Deviation of the expectation period.
+            targetCollection: targetCollection, // 11. ImageCollection. The gathered and processed target image collection.
+            targetCollectionFit: targetCollectionFit, // 12. ImageCollection. The target collection with the fitted harmonic model applied.
+            targetResiduals: targetResiduals, // observed - fitted for target
+            targetCollectionLackOfFit: targetCollectionLackOfFit, // 13. Multi-band Image. The difference between target and fitted values.
+            targetLOFAsZScore: targetLOFAsZScore, // 14.  Multi-band Image. The normalized lack of fit of the target collection (Z-scores) calculated using residual standard deviation.
+            targetPeriodSummaryValue: targetPeriodSummaryValue // 15. Image. Summary statistic for the target period.
+            // theExpectationRMSE : theExpectationRMSE,
+        } // end of afn_createExpAndTargetStream
+    }
+    var hasOptical = afn_checkForOptical(var_args.expectationCollectionParameters)
+    var hasSAR = afn_checkForSAR(var_args.expectationCollectionParameters)
+    // print(hasSAR, "has SAR1")
+    print("**************************************")
+    print(hasOptical, "has Optical")
+    print(hasSAR, "has SAR2")
+    var blendingStreams = hasOptical && hasSAR;
+    print("blending streams?", blendingStreams)
+    // var blendingStreams = var_args.blendingStreams // to set within the interface. comment this in when ready.
+    if (!blendingStreams) {
+        print("Not blending streams. Happens when only one of Optical or SAR is checked.")
+        var organizedBULCDStream = afn_createExpAndTargetStream(var_args)
+        print("organizedBULCDStream is", organizedBULCDStream)
+    }
+    if (blendingStreams) {
+        print("Yes, blending streams. This happens when both Optical and SAR are checked.")
+        // Isolate the SAR part and analyze its data stream.
+        // Park the arguments because of how JS doesn't make a new copy of dictionaries. This is analogous to a deep copy.
+        var parked_args = afn_gatheringArgsParking(var_args)
+        print("parked args", parked_args)
+        // now we can work with the var_args dictionary, knowing we can reinstate it at the end.
+        // var_args.aaa = 1 // for debugging
+
+        // let's turn off the Optical Parameters while we collection the SAR values.
+        // note we might have S1 on, or might have AL on, or NISAR on. Our goal is to turn off the opticals and
+        // leave the SARS as-is.
+        var_args.expectationCollectionParameters.datasetSelection.L5 = false;
+        var_args.expectationCollectionParameters.datasetSelection.L7 = false;
+        var_args.expectationCollectionParameters.datasetSelection.L8 = false;
+        var_args.expectationCollectionParameters.datasetSelection.L9 = false;
+        var_args.expectationCollectionParameters.datasetSelection.MO = false;
+        var_args.expectationCollectionParameters.datasetSelection.S2 = false;
+        var_args.targetCollectionParameters.datasetSelection.L5 = false;
+        var_args.targetCollectionParameters.datasetSelection.L7 = false;
+        var_args.targetCollectionParameters.datasetSelection.L8 = false;
+        var_args.targetCollectionParameters.datasetSelection.L9 = false;
+        var_args.targetCollectionParameters.datasetSelection.MO = false;
+        var_args.targetCollectionParameters.datasetSelection.S2 = false;
+        print("modified collection Arguments: SAR", var_args)
+        var SARStream = afn_createExpAndTargetStream(var_args)
+        print("SAR Stream", SARStream)
+        // Now, do optical. start by restoring the original var_args.
+        print("now doing optical...")
+        var_args.expectationCollectionParameters = parked_args.expectationCollectionParameters
+        var_args.targetCollectionParameters = parked_args.targetCollectionParameters
+        print("restored var_args version 2", var_args)
+
+        // need to flip the radar ones so that the opticals are gathered correctly.
+        var_args.expectationCollectionParameters.datasetSelection.AL = false;
+        var_args.targetCollectionParameters.datasetSelection.AL = false;
+        var_args.expectationCollectionParameters.datasetSelection.NI = false;
+        var_args.targetCollectionParameters.datasetSelection.NI = false;
+        var_args.expectationCollectionParameters.datasetSelection.S1 = false;
+        var_args.targetCollectionParameters.datasetSelection.S1 = false;
+        print("modified collection Arguments: Optical", var_args)
+        var opticalStream = afn_createExpAndTargetStream(var_args)
+        print("Optical Stream", opticalStream)
+        // now, restore var_args in case that is needed downstream.
+        var_args.expectationCollectionParameters = parked_args.expectationCollectionParameters
+        var_args.targetCollectionParameters = parked_args.targetCollectionParameters
+        print("restored var_args version 3", var_args)
+        print("Now, need to combine the streams!")
+        print("opticalStream.targetLOFAsZScore", opticalStream.targetLOFAsZScore)
+        print("SARStream.targetLOFAsZScore", SARStream.targetLOFAsZScore)
+        var organizedBULCDStream = afn_blendOpticalAndSARStreams(opticalStream, SARStream)
+    }
+    print("organizedBULCDStream", organizedBULCDStream)
+    return {
+        // commentary from Gemini. truly amazing.
+        expectationCollection: organizedBULCDStream.expectationCollection, // 1. ImageCollection. Gathered and processed expectation collection.
+        expectationYearRegressionObject: organizedBULCDStream.expectationYearRegressionObject, // 2. Object. Object containing details about the fitted harmonic regression model to expectation data.
+        aCoefficientSetExpectationYear: organizedBULCDStream.aCoefficientSetExpectationYear, // 3. Image. Coefficients of the fitted harmonic model (expectation).
+        // theExpectationResiduals: theExpectationResiduals, // 4. ImageCollection. Image collection of residuals from the fitted harmonic model (expectation).
+        theExpectationR2: organizedBULCDStream.theExpectationR2, // 5. Image. R-squared value of the fitted harmonic model (expectation).
+        expectCollectionFit: organizedBULCDStream.expectCollectionFit, // 6. ImageCollection. The expectation collection with the fitted harmonic model applied.
+        expectationResiduals: organizedBULCDStream.expectationResiduals, // observed - fitted for expectation
+        expectationPeriodSummaryValue: organizedBULCDStream.expectationPeriodSummaryValue, // 7. Image. Summary statistic for the expectation period.
+        expectationPeriodSD: organizedBULCDStream.expectationPeriodSD, // 8. Image. Standard deviation of the expectation period.
+        // expectationPeriodDeviationsIC: expectationPeriodDeviationsIC, // not checked closely. better to use expectationresiduals instead. ImageCollection. Image collection of deviations from the fitted model for the expectation period.
+        //                                                               // Three bands: Observed, Expected, Difference Between Them.
+        expectationPeriodMAD: organizedBULCDStream.expectationPeriodMAD, // 10. Image. Median Absolute Deviation of the expectation period.
+        targetCollection: organizedBULCDStream.targetCollection, // 11. ImageCollection. The gathered and processed target image collection.
+        targetCollectionFit: organizedBULCDStream.targetCollectionFit, // 12. ImageCollection. The target collection with the fitted harmonic model applied.
+        targetResiduals: organizedBULCDStream.targetResiduals, // observed - fitted for target
+        targetCollectionLackOfFit: organizedBULCDStream.targetCollectionLackOfFit, // 13. Multi-band Image. The difference between target and fitted values.
+        targetLOFAsZScore: organizedBULCDStream.targetLOFAsZScore, // 14.  Multi-band Image. The normalized lack of fit of the target collection (Z-scores) calculated using residual standard deviation.
+        targetPeriodSummaryValue: organizedBULCDStream.targetPeriodSummaryValue // 15. Image. Summary statistic for the target period.
+        // theExpectationRMSE : theExpectationRMSE,
+    }
+}
+exports.afn_organizeBULCD_Inputs = afn_organizeBULCD_Inputs

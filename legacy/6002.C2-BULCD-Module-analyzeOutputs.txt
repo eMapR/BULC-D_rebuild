@@ -1,0 +1,180 @@
+function afn_interpretBULCDResult(var_interpretationArgs) {
+    print("Post-BULC analysis arguments", var_interpretationArgs)
+    var expectationPeriodSummaryValue = var_interpretationArgs.expectationPeriodSummaryValue;
+    var targetPeriodSummaryValue = var_interpretationArgs.targetPeriodSummaryValue;
+    var theFinalBULCprobs = var_interpretationArgs.theFinalBULCprobs
+    // var endingChangeThreshold = var_interpretationArgs.endingChangeThreshold
+    var defaultStudyArea = var_interpretationArgs.defaultStudyArea
+    var theTargetYear = var_interpretationArgs.theTargetYear;
+    var expPeriodMeanThreshold = var_interpretationArgs.expPeriodMeanThreshold;
+    var targetPeriodMeanThreshold = var_interpretationArgs.targetPeriodMeanThreshold;
+    var dropThresholdToDenoteChange = var_interpretationArgs.dropThresholdToDenoteChange
+    var gainThresholdToDenoteChange = var_interpretationArgs.gainThresholdToDenoteChange
+    var whichReduction = var_interpretationArgs.whichReduction
+    // var maxExportPixels = var_interpretationArgs.maxExportPixels
+    // parameters for 'wasItEver'
+    var probabilityStackThroughTime = var_interpretationArgs.probabilityStackThroughTime;
+    var wasItEverType = var_interpretationArgs.wasItEverType;
+    var wasItEverComparison = var_interpretationArgs.wasItEverComparison
+    var wasItEverValue = var_interpretationArgs.wasItEverValue
+    if (wasItEverType == 'down') {
+        var theLayerMatchKey = "probCls1" // used with match below
+    }
+    if (wasItEverType == 'same') {
+        var theLayerMatchKey = "probCls2" // used with match below
+    }
+    if (wasItEverType == 'up') {
+        var theLayerMatchKey = "probCls3" // used with match below
+    }
+    var theLayerMatchKey = ".*" + theLayerMatchKey + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+    // print(theLayerMatchKey)
+    var probStackToCompare = probabilityStackThroughTime.select(theLayerMatchKey)
+    if (wasItEverComparison == 'gt') {
+        var binaryStack = probStackToCompare.gt(wasItEverValue);
+    } else if (wasItEverComparison == 'gte') {
+        var binaryStack = probStackToCompare.gte(wasItEverValue);
+    } else if (wasItEverComparison == 'lt') {
+        var binaryStack = probStackToCompare.lt(wasItEverValue);
+    } else if (wasItEverComparison == 'lte') {
+        var binaryStack = probStackToCompare.lte(wasItEverValue);
+    } else if (wasItEverComparison == 'eq') {
+        var binaryStack = probStackToCompare.eq(wasItEverValue);
+    } else if (wasItEverComparison == 'neq') {
+        var binaryStack = probStackToCompare.neq(wasItEverValue);
+    }
+    var sumOfEver = binaryStack.reduce('sum').rename(['wasItEver']);
+    var wasItEver = sumOfEver.gte(1);
+    var howOftenWasIt = sumOfEver.divide(binaryStack.bandNames().size()).rename(['howOftenWasIt']);
+
+    // print(binaryStack)
+    // Map.addLayer(binaryStack, {}, "binary Stack test")
+    // Map.addLayer(wasItEver, {}, "wasItEver")
+    // //=======================================================================================================
+    // /*
+    //           SECTION 4. BULC-D RESULTS
+    // */
+    // //=======================================================================================================
+    var probNoChange = ee.Image(theFinalBULCprobs.select(1))
+    Map.addLayer(probNoChange, {}, '20.final No Change Prob', true, 0)
+    var drop = ee.Image(theFinalBULCprobs.select(0).gt(dropThresholdToDenoteChange))
+    drop = drop.updateMask(drop)
+    Map.addLayer(drop, {
+        palette: ['lightpink']
+    }, "21. " + Math.round(dropThresholdToDenoteChange * 100) + "%+ change of drop (of any size): pink", true, 0.5)
+    var up = ee.Image(theFinalBULCprobs.select(2).gt(gainThresholdToDenoteChange))
+    up = up.updateMask(up)
+    Map.addLayer(up, {
+        palette: ['blue']
+    }, "22. " + Math.round(gainThresholdToDenoteChange * 100) + "%+ change of increase (of any size): blue")
+    Map.addLayer(probNoChange.multiply(-1).add(1), {}, '23. 1- final No Change Prob (ie, Prob of Change)', true, 0)
+    var theDiff = targetPeriodSummaryValue.subtract(expectationPeriodSummaryValue)
+    print("whichReduction", whichReduction)
+    if (whichReduction === "NBR")
+        Map.addLayer(theDiff, {
+            min: -0.2,
+            max: 0.3
+        }, "24. NBR Difference: Target Year Mean - Expectation Year Mean (reversed)", true, 0)
+    ///// Change layer for target year
+    var largeDropOrange = drop // (pink probability)
+        .and(expectationPeriodSummaryValue.gt(expPeriodMeanThreshold)) /// nbr threshold
+        .and(targetPeriodSummaryValue.lt(targetPeriodMeanThreshold)) /// nbr threshold
+        .select([0], ['changeFlag']);
+    // print(wasChanged)
+    largeDropOrange = largeDropOrange.updateMask(largeDropOrange)
+    Map.addLayer(largeDropOrange, {
+            palette: ['orange']
+        }, "25. Detected forest drops in target year: orange "
+        // + theTargetYear
+        , true)
+    //////////////////////////////
+    //// Timing
+    //////////////////////////////
+
+    // this "if" statement is here for backward compatibility (to be removed once timing results have been tested)
+    if(var_interpretationArgs.timing){
+      var allProbabilityLayers = var_interpretationArgs.probabilityStackThroughTime;
+      var timingThreshold = var_interpretationArgs.timing.threshhold;
+      var changeLayer = var_interpretationArgs.timing.changeLayer;
+
+      // var timedBULCDResultStructure = afn_firstEvidenceOfChange(timing_args)
+      // var highChangeProb = ee.Image(timedBULCDResultStructure.firstChange)
+      // // returns a number like '35' in each pixel, meaning that it was the 35th time slot that first confirmed
+      // a change.
+      // Now, compute when that date is, with respect to the day step size and the possibly non-Jan1 start date.
+      // e.g., 35 might mean 35 slots * 3 days + 60dayStartMeaningMarch1.
+      // var dateThatResult = afn_computeDateFromParams(timedBULCDResult, daystepsize, staggeredStartDate)
+      // start indices up by 1 to avoid confusing pixels that never change with
+      // pixels that change at t=0
+
+
+      var theLayerMatchKey = "probCls1" // used with match below
+      var theLayerMatchKey = ".*" + theLayerMatchKey + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+
+      var prob1 = allProbabilityLayers.select(theLayerMatchKey)
+
+      var numBands = prob1.bandNames().length();
+      var indicesIm = ee.Image.constant(ee.List.sequence(1, numBands));
+      var highChangeProb = prob1.gt(timingThreshold);
+
+      var changeIndices = highChangeProb.multiply(indicesIm);
+      // Map.addLayer(changeIndices, {}, 'change indices')
+
+      // pixels that never change will have values of zero; set them to some max value
+      // so the min reducer ignores them
+      var MAX = numBands.add(1);
+      changeIndices = changeIndices.where(changeIndices.eq(0), MAX);
+
+      // get the minimum value at each pixel
+      var firstChange = changeIndices.reduce(ee.Reducer.min());
+      // Map.addLayer(firstChange, {}, 'firstChange')
+      // Map.addLayer(firstChange.eq(MAX), {palette: ['green', 'blue']})
+      // ditch the max values
+      firstChange = firstChange.updateMask(firstChange.neq(MAX));
+      Map.addLayer(firstChange, {}, 'firstChange')
+
+      // subtract off 1 to get the right index
+      firstChange = firstChange.subtract(1);
+      firstChange = firstChange.select([0], ['changeStepRelativeToStartDate'])
+          .updateMask(changeLayer)
+
+      var orangeStepDating = firstChange.multiply(largeDropOrange.updateMask(var_interpretationArgs.waterMask)) // multiplied to get the intersect
+      var orangeDateDOY = orangeStepDating.multiply(var_interpretationArgs.timing.dayStepSize).add(var_interpretationArgs.timing.targetFirstDOY).rename(['EstimatedDOYOfChange'])
+
+      // var actualDOYChange = firstChange.divide(3).multiply(2) // tweak with non-hardcoded values before using
+      // Map.addLayer(actualDOYChange);
+    }
+    // commenting this out for now, since it's written in the interface code
+    // if putting it back in, how about making an afn_exportBULCD function that could
+    // be called by both the interface and non-interface versions.
+    // Export.image.toAsset({
+    //     image: probNoChange,
+    //     description: '333-BULC_output_noChangeProb',
+    //     region: defaultStudyArea,
+    //     scale: 10,
+    //     maxPixels: maxExportPixels
+    // });
+    // Export.image.toAsset({
+    //     image: theFinalBULCprobs,
+    //     description: '334-BULC_output_finalBulcProbs',
+    //     region: defaultStudyArea,
+    //     scale: 10,
+    //     maxPixels: maxExportPixels
+    // });
+    return {
+        largeDropOrange: largeDropOrange,
+        probNoChange: probNoChange,
+        drop: drop,
+        up: up,
+        theDiff: theDiff,
+        wasItEver: wasItEver,
+        howOftenWasIt: howOftenWasIt,
+        timing: {
+          orangeStepDating: orangeStepDating,
+          orangeDateDOY: orangeDateDOY,
+          highChangeProb: highChangeProb
+        },
+        expectationPeriodSummaryValue: expectationPeriodSummaryValue,
+        targetPeriodSummaryValue: targetPeriodSummaryValue
+    };
+}
+exports.afn_interpretBULCDResult = afn_interpretBULCDResult

@@ -26,20 +26,31 @@ STUBBED, NOT IMPLEMENTED:
     (`assemble_evidence_collection` raises NotImplementedError if one
     of these is enabled in config).
 
-PARTIAL, IMPLEMENTED AGAINST A RECONSTRUCTION, NOT THE REAL SOURCE:
+PARTIAL, PARTLY CONFIRMED AGAINST THE REAL SOURCE:
   - `organize_inputs()` — the legacy `afn_organizeBULCD_Inputs`
     equivalent: fits the expectation-period harmonic regression (shape
     selected by config.modality) against a global baseline window
     (config.evidence.expectation_first_year/last_year), then scores the
     ENTIRE continuous evidence stream into z-scores (per
-    config.sensitivity) against that fit. Its real implementation lives
-    in a GEE module (`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`,
-    repo `alemlakes/r-2903-Dev`) we still don't have source for -
-    implemented here against a credible published reconstruction
-    instead (Cardille & Fortin 2016; Willis 2022 - see CLAUDE.md
-    "Reference papers"). Every formula choice not explicitly given in
-    those papers (modality-priority resolution, the z-score epsilon) is
-    flagged inline as a documented assumption, not a silent guess.
+    config.sensitivity) against that fit - the "continuous stream"
+    piece is a deliberate modernization divergence from the legacy's
+    discrete expectation/target split (see
+    docs/decisions/0003-continuous-evidence-replaces-expectation-target-split.md),
+    not something to reconcile against source. Its real implementation
+    lives in `6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`
+    (`alemlakes/r-2903-Dev`), fetched 2026-08-10
+    (see docs/findings.md "organizeBULCD_Inputs obtained"). Two formulas
+    are now CONFIRMED against it, not reconstructed: `_zscore_image()`'s
+    denominator is `max(residual_stddev, denominator_factor)` clamped to
+    `[-10, 10]` (not an additive epsilon), and `_fit_expectation_model()`'s
+    `residual_stddev` is a plain sample standard deviation (`n-1`) of the
+    observed-minus-fitted residuals, not a regression residual-standard-error
+    (`n - num_regressors`). Still NOT confirmed: modality-priority
+    resolution when multiple `ModalityConfig` flags are true (the source
+    calls out to a still-missing harmonic-functions module for this), and
+    R2's exact formula (also delegated to that missing module) - both
+    still flagged inline as documented assumptions against Cardille &
+    Fortin 2016 / Willis 2022 (see CLAUDE.md "Reference papers").
 
 Assumes `ee.Initialize(...)` has already been called by the caller —
 this module never calls it itself, so it has no opinion about which
@@ -56,6 +67,7 @@ import ee
 
 from bulcd.config.schema import (
     BULCDConfig,
+    EvidenceConfig,
     ModalityConfig,
     S2CloudMaskConfig,
     SensitivityConfig,
@@ -256,11 +268,121 @@ def _s2_evidence(cfg: SensorEvidenceConfig, study_area: ee.Geometry, band: str) 
     return collection.map(_process)
 
 
+def _evidence_date_and_doy_bounds(
+    evidence: EvidenceConfig,
+) -> tuple[int, int, int, int]:
+    """Union (not intersection) of every enabled sensor's resolved year
+    range and DOY window.
+
+    CONFIRMED 2026-08-10 against the real afn_gatherCollectionsAndReduce
+    source (515-gatherCollections27b): production computes ONE combined
+    groupStartDOY/groupEndDOY (min firstDOY / max lastDOY across all
+    enabled sensors) and ONE combined year list, then bins the ENTIRE
+    multi-sensor stream against that single shared window - not a
+    per-sensor window. For configs where every enabled sensor already
+    shares the same DOY/year range (e.g. this project's cell 8C config)
+    the union is a no-op; this matters once sensors have genuinely
+    different windows.
+    """
+    first_years: list[int] = []
+    last_years: list[int] = []
+    first_doys: list[int] = []
+    last_doys: list[int] = []
+    for sensor_code, sensor_cfg in evidence.sensors.items():
+        if not sensor_cfg.enabled:
+            continue
+        start, end = _date_bounds(sensor_code, sensor_cfg)
+        first_years.append(int(start[:4]))
+        last_years.append(int(end[:4]) - 1)  # end is exclusive (see _date_bounds)
+        first_doys.append(sensor_cfg.first_doy)
+        last_doys.append(sensor_cfg.last_doy)
+    return min(first_years), max(last_years), min(first_doys), max(last_doys)
+
+
+def _bin_evidence_by_day_step(
+    collection: ee.ImageCollection,
+    band: str,
+    day_step_size: int,
+    first_year: int,
+    last_year: int,
+    first_doy: int,
+    last_doy: int,
+) -> ee.ImageCollection:
+    """Aggregates a raw per-image evidence stream into day_step_size-day
+    temporal bins, collapsing every image inside a bin into ONE median
+    image per bin.
+
+    CONFIRMED 2026-08-10 against the real afn_gatherCollectionsAndReduce
+    source (515-gatherCollections27b) - this was a genuine gap, not a
+    tuning knob: `dayStepSize` was previously parsed into config and never
+    used anywhere. Production divides the DOY/year range into
+    dayStepSize-day bins, gathers every image from every enabled sensor
+    that falls in a bin, and takes the median across the WHOLE bin,
+    producing exactly one "Event" per bin regardless of how many raw
+    images (0, 1, or several, across any sensor) landed in it - not one
+    Event per raw image, which is what this rebuild did before this fix.
+    Bin timestamp = the bin's END (matches production's
+    `.set('system:time_start', end.millis())`).
+
+    Empty bins: production seeds every bin's gather list with a
+    structurally-valid-but-effectively-nodata "dummy" image so `.median()`
+    never collapses to a zero-band result - reproduced here by unioning in
+    a fully self-masked placeholder image of the right band name before
+    reducing, so `.median()` always returns a correctly-shaped image (real
+    data where any exists, masked where none does) instead of erroring on
+    an empty ImageCollection.
+
+    Implementation note: an earlier version of this function used
+    `.map()` over the bin list with an independent `.filterDate()` inside
+    - each of ~140 bins re-scanning the full evidence collection - which
+    built a computation graph large enough to hit "User memory limit
+    exceeded" even for a single-point query. `ee.Join.saveAll()` is the
+    standard, efficient EE idiom for "group elements of one collection by
+    date-range membership in another" and avoids that blowup entirely.
+    """
+    day_step_millis = day_step_size * 24 * 60 * 60 * 1000
+    placeholder = ee.Image.constant(0).rename(band).selfMask()
+
+    def _bin_starts_for_year(year: ee.Number) -> ee.List:
+        start_millis = ee.Date.fromYMD(year, 1, 1).advance(ee.Number(first_doy).subtract(1), "day").millis()
+        end_millis = ee.Date.fromYMD(year, 1, 1).advance(ee.Number(last_doy).subtract(1), "day").millis()
+        return ee.List.sequence(start_millis, end_millis, day_step_millis)
+
+    def _bin_feature(bin_start_millis: ee.Number) -> ee.Feature:
+        start = ee.Date(bin_start_millis)
+        end = start.advance(day_step_size, "day")
+        return ee.Feature(None, {"start": start.millis(), "end": end.millis()})
+
+    years = ee.List.sequence(first_year, last_year)
+    bin_starts = ee.List(years.map(_bin_starts_for_year)).flatten()
+    bins = ee.FeatureCollection(bin_starts.map(_bin_feature))
+
+    # bin.start <= image.system:time_start < bin.end
+    time_filter = ee.Filter.And(
+        ee.Filter.lessThanOrEquals(leftField="start", rightField="system:time_start"),
+        ee.Filter.greaterThan(leftField="end", rightField="system:time_start"),
+    )
+    joined = ee.Join.saveAll(matchesKey="images").apply(bins, collection, time_filter)
+
+    def _bin_image(bin_feature: ee.Feature) -> ee.Image:
+        bin_feature = ee.Feature(bin_feature)
+        images = ee.ImageCollection(ee.List(bin_feature.get("images"))).merge(
+            ee.ImageCollection([placeholder])
+        )
+        return images.median().set("system:time_start", bin_feature.getNumber("end"))
+
+    return ee.ImageCollection(joined.map(_bin_image))
+
+
 def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
     """Builds the continuous, multi-sensor, single-band evidence stream.
 
     Real, working implementation for Landsat 5/7/8/9 and Sentinel-2. Raises
     NotImplementedError for any other enabled sensor (see module docstring).
+    Each raw satellite image is first cloud-masked and reduced to one band
+    per sensor, then binned into `evidence.day_step_size`-day windows and
+    median-combined within each window (see `_bin_evidence_by_day_step()`)
+    - the actual "Event" granularity production uses, confirmed 2026-08-10.
     """
     study_area = resolve_study_area(config.study_area)
     band = config.reduction.band
@@ -293,7 +415,12 @@ def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
     # heterogeneous per-sensor collections without this can raise a
     # "homogeneous image collection" type mismatch (same gotcha noted in
     # the sibling GeoTimeSeries project's CLAUDE.md for harmonized_collection()).
-    return merged.map(lambda img: img.toFloat()).sort("system:time_start")
+    merged = merged.map(lambda img: img.toFloat()).sort("system:time_start")
+
+    first_year, last_year, first_doy, last_doy = _evidence_date_and_doy_bounds(config.evidence)
+    return _bin_evidence_by_day_step(
+        merged, band, config.evidence.day_step_size, first_year, last_year, first_doy, last_doy
+    )
 
 
 @dataclass
@@ -431,6 +558,21 @@ def _fit_expectation_model(
         lambda img: _add_fitted_band(img, coefficients, regressor_names)
     )
 
+    # CONFIRMED 2026-08-10 against the real organizeBULCD_Inputs source
+    # (afn_summarizeICSimply's "StdDev" branch: plain
+    # residuals.reduce(ee.Reducer.sampleStdDev()) over observed-minus-fitted
+    # residuals) - production uses a straight sample standard deviation
+    # (n-1 denominator), NOT a regression residual-standard-error
+    # (n - num_regressors) like this used to compute. OLS residuals sum to
+    # ~0 when the design includes a constant term (always true here), so
+    # the two formulas differ only in that denominator.
+    residuals = fitted_expectation.map(
+        lambda img: img.select(band).subtract(img.select("fitted")).rename("residual")
+    )
+    residual_stddev = (
+        residuals.select("residual").reduce(ee.Reducer.sampleStdDev()).rename("residual_stddev")
+    )
+
     def _squared_residual(image: ee.Image) -> ee.Image:
         return (
             image.select(band)
@@ -440,10 +582,6 @@ def _fit_expectation_model(
         )
 
     ss_res = fitted_expectation.map(_squared_residual).reduce(ee.Reducer.sum()).rename("ss_res")
-    n = expectation_collection.size()
-    residual_stddev = (
-        ss_res.divide(n.subtract(len(regressor_names))).sqrt().rename("residual_stddev")
-    )
 
     observed_mean = expectation_collection.select(band).reduce(ee.Reducer.mean())
     ss_tot = (
@@ -465,18 +603,21 @@ def _fit_expectation_model(
 def _zscore_image(
     observed: ee.Image, fitted: ee.Image, residual_stddev: ee.Image, sensitivity: SensitivityConfig
 ) -> ee.Image:
-    """(observed - fitted) / residual_stddev, scaled per config.sensitivity.
+    """(observed - fitted) / max(residual_stddev, denominator_factor), clamped to [-10, 10].
 
-    ASSUMPTION (exact formula lives in the still-missing organizeBULCD_Inputus
-    source, not given explicitly in either paper): z_score_denominator_factor
-    (default 0.05) is read as a stabilizing epsilon added to residual_stddev,
-    preventing divide-by-zero/blowup in near-constant pixels (e.g. water),
-    not an independent multiplicative scale - flagged the same way the
-    SWIR-reduction assumption already is elsewhere in this file.
+    CONFIRMED 2026-08-10 against the real organizeBULCD_Inputs source
+    (`targetLOFAsZScore = rescaledResiduals.divide(expectationPeriodSD.max(ZScoreDenominatorFactor)).max(-10).min(10)`):
+    z_score_denominator_factor is a FLOOR/clamp on residual_stddev (never
+    let the denominator drop below this, preventing blowup in
+    near-constant pixels like water), NOT an additive epsilon like this
+    used to implement - and the result is explicitly clamped to [-10, 10].
+    The clamp has little practical effect given this project's bin_cuts
+    (any |z| > 2 already collapses into the same outermost bin), but is
+    included for fidelity to the confirmed formula.
     """
     numerator = observed.subtract(fitted).multiply(sensitivity.z_score_numerator_factor)
-    denominator = residual_stddev.add(sensitivity.z_score_denominator_factor)
-    return numerator.divide(denominator).rename("zscore")
+    denominator = residual_stddev.max(sensitivity.z_score_denominator_factor)
+    return numerator.divide(denominator).clamp(-10, 10).rename("zscore")
 
 
 def organize_inputs(config: BULCDConfig) -> OrganizedInputs:

@@ -42,6 +42,18 @@ in the reconstructed source material. Defaults to `1.0` (off), so the
 engine is faithful to the reconstructed classic method unless a caller
 opts in - "preserve the Bayesian updating core" (CLAUDE.md modernization
 goal) means this should never be silently on.
+
+`run_bulc()`'s `posterior_leveler` parameter, by contrast, IS part of
+the real classic method - confirmed 2026-08-10 against the actual
+BULC-Minimal-Module-107 source (legacy/BULC-Minimal-Module-107.txt).
+Production's per-step loop (`afn_hiddenBULCIterateWithOptions`) applies
+a SECOND dampening step to the posterior after every Bayes update
+(`afn_dayIRebalancingV3`), separate from the transition-table dampening
+`dampening_factor`/`dampen()` already models. Without it, posteriors can
+compound toward unbounded confidence over many sequential steps in a way
+production's own math never allows - see `dampen()`'s docstring and
+docs/decisions/ for the full story. Defaults to `1.0` (no-op) pending
+empirical validation, same rollout discipline as `dampening_factor`.
 """
 
 from __future__ import annotations
@@ -72,24 +84,32 @@ class BulcResult:
     classification_stack: ee.ImageCollection
 
 
-def dampen(update_factors: ee.Image, dampening_factor: float) -> ee.Image:
+def dampen(image: ee.Image, leveler: float) -> ee.Image:
     """Cardille & Fortin (2016) section 4.6: `d * t + (1 - d) / n_classes`.
 
-    Flattens update strength when classifications agree suspiciously well
-    (the paper's own example: d=0.5 turned Burn's [0.79, 0.11, 0.32] update
-    factors into [0.56, 0.22, 0.33]). dampening_factor=1.0 is a no-op - raw
-    update factors pass through unchanged - but 1.0 is NOT the default
+    Generic re-leveling toward uniform - used TWICE in run_bulc(), matching
+    two distinct steps confirmed in the real BULC-Minimal-Module-107 source
+    (legacy/BULC-Minimal-Module-107.txt): once on the incoming update
+    factors before the Bayes update (`dampening_factor` /
+    production's `transitionLeveler`+`transitionMinimum`), and again on the
+    resulting posterior after it (`posterior_leveler` / production's
+    `posteriorLeveler`+`posteriorMinimum`, via `afn_dayIRebalancingV3`).
+    Both are literally the same formula in production - confirmed by the
+    numbers (`posteriorMinimum` 0.0333... = `(1-0.9)/3`,
+    `transitionMinimum` 0.1 = `(1-0.7)/3`) - so one function serves both.
+
+    The paper's own example: d=0.5 turned Burn's [0.79, 0.11, 0.32] update
+    factors into [0.56, 0.22, 0.33]. leveler=1.0 is a no-op - the image
+    passes through unchanged - but 1.0 is NOT dampening_factor's default
     upstream (see BULCAdvancedParams): a first live-EE run found no
     dampening produces extreme overconfidence over many sequential
-    Events, so the default is 0.5, matching the paper's own tested value.
+    Events, so its default is 0.5, matching the paper's own tested value.
     """
-    if dampening_factor == 1.0:
-        return update_factors
-    n_classes = update_factors.bandNames().size()
+    if leveler == 1.0:
+        return image
+    n_classes = image.bandNames().size()
     uniform_share = ee.Image.constant(1).divide(n_classes)
-    return update_factors.multiply(dampening_factor).add(
-        uniform_share.multiply(1 - dampening_factor)
-    )
+    return image.multiply(leveler).add(uniform_share.multiply(1 - leveler))
 
 
 def bayes_update(prior: ee.Image, update_factors: ee.Image) -> ee.Image:
@@ -156,6 +176,7 @@ def run_bulc(
     initial_prior: ee.Image,
     dampening_factor: float = 0.5,
     recency_factor: float = 1.0,
+    posterior_leveler: float = 1.0,
 ) -> BulcResult:
     """Folds bayes_update() over a time-ordered update-factor collection.
 
@@ -164,7 +185,11 @@ def run_bulc(
     upstream) and its images must match initial_prior's band count/order
     (see module docstring). `recency_factor` defaults to 1.0 (off, no
     departure from the reconstructed classic method) - see discount()'s
-    docstring before turning it on.
+    docstring before turning it on. `posterior_leveler` also defaults to
+    1.0 (no-op) pending empirical validation, but unlike recency_factor IS
+    part of the real classic method (see module docstring and dampen()'s
+    docstring) - production applies it after every Bayes update, not just
+    dampening_factor's pre-update step.
     """
 
     def _step(image: ee.Image, accumulator: ee.Dictionary) -> ee.Dictionary:
@@ -176,6 +201,7 @@ def run_bulc(
         source_image = ee.Image(image)
         dampened = dampen(source_image, dampening_factor)
         posterior = bayes_update(prior, dampened)
+        posterior = dampen(posterior, posterior_leveler)
         posterior = discount(posterior, recency_factor)
         classification = _argmax_label(posterior)
 

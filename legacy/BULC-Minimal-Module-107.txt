@@ -1,0 +1,1267 @@
+//=======================================================================================================
+/*
+          SECTION 0. Versioning
+*/
+//=======================================================================================================
+var theVersion = "BULC-Module-107-release"
+print("using BULC version " + theVersion)
+
+//////********************************************************************************************************************
+// capacity:
+// hard-coded
+//   writing probs, event, comparison at each step:
+//   3 classes via NLCD remap: 256+ images (1282+ bands) for aoi0
+//      same for running over all USA!! (aoi3)
+
+// pre-overlay,
+//    writing probs at each step
+
+//    95 classes of NLCD, 300m overlay: 32+ images (3138+ bands) for aoi0 (test ongoing)
+//    95 classes of NLCD, 300m overlay: 64+ images (6000+ bands) for aoi1 (when it broke, it said capacity exceeded)
+//    95 classes of NLCD, 30m overlay: <2 images  for aoi1 (when it broke, it said capacity exceeded)
+
+//    3 classes via NLCD remap, 300m overlay: 256+ images (1500+ bands), for aoi0. (v17. stalled once then went through.)
+//    3 classes via NLCD remap, 300m overlay: I think 8 images, for aoi3 (all USA).
+
+// Tests:
+// 1. jc 9/14/20. Verified the workings of the hard-coded truth tables. Reproduced the numbers exactly as expected in
+//        "BULC Probability update illustration V2"
+//          https://docs.google.com/spreadsheets/d/1Xo7UllSWFade4_lh9sLc2mqeYwHxJ-JEJGV7mInAILU/edit?usp=sharing
+//////********************************************************************************************************************
+
+// To resolve:
+// Should this line:
+//     var theTotalImageCbounter = ee.Image(0).rename([TotalImageCounterLabel]);
+// be this?
+//     var theTotalImageCounter = ee.Image(0).clip(defaultStudyArea).rename([TotalImageCounterLabel]);
+
+// Dec 26, 2023. Ran jsbeautifier on this. Removed a few blank lines and fixed a typo. No logic change.
+
+//=======================================================================================================
+/*
+          SECTION 1. Requires
+*/
+//=======================================================================================================
+
+//=======================================================================================================
+/*
+          SECTION 4. START OF FUNCTION DEFINITIONS
+*/
+//=======================================================================================================
+function afn_createPriorsFromLandcoverMap(thisrunsInitializingLeveler, initialImage, numberOfClassesToTrack, ProbsLabel) {
+    print("Creating starting probabilities from base land cover map...")
+    initialImage = ee.Image(initialImage).unmask().multiply(1) // the .multiply(1) is a hack as mentioned in the forum
+    // on April 9 and 10 2020.
+    // with that done, some pixels might be nodata on the initialImage.  This changes
+    // them to be 1.
+    //    initialImage = ee.Image(1).where(initialImage.gt(1),initialImage);
+
+
+    // create a list of numbers from 1 to a number like '4'.
+    // cast it to an array
+    var theArrayList = ee.Array(ee.List.sequence(1, ee.Number(
+        numberOfClassesToTrack)))
+    //print(theArrayList, "217.theArrayList")
+
+    // Now, create an array image from that array of values.
+    // the intention is a 1D array of the numbers 1,2,3,4
+    // (but where the number '4' is variable and passed in)
+
+    var theStackAsArray = ee.Image(theArrayList).rename(ProbsLabel)
+    // print("218.theStackAsArray", theStackAsArray)
+    // Map.addLayer(theStackAsArray, {}, "218") // works fine.
+
+    // a bit of leftover testing from April 10 2020 errors.
+    // Now, we seek the following:
+    // for each pixel, given that the value was i, set the ith
+    // slot to 1 and the other slots to 0.
+
+    // Try 1: hardcoded. good.
+    // var theLCMapExploded = theStackAsArray.eq(2) // hardcoded value works
+
+    // Try 2: set a constant image. Good.
+    //var initialImage = ee.Image.constant(3) // constant image works
+
+    // Try 3: random image set to betw 1 and 3, truncated and set to integer. Good.
+    //var initialImage = ee.Image.random(0, "uniform").multiply(3).add(0.5).round().int()
+
+
+    // show the initial image.
+    // Map.addLayer(initialImage, {}, "216.Initial")
+
+    var theLCMapExploded = theStackAsArray.eq(initialImage) // constant image works
+
+    // Map.addLayer(theLCMapExploded, {}, "219.theLCMapExploded")
+    // print("335.exploded map with 1s", theLCMapExploded)
+    // print("Finished creating starting probabilities.")
+
+    // now let's level that exploded map
+    var theLCMapExplodedAndLeveled = afn_LevelInitialLCExploded(theLCMapExploded, thisrunsInitializingLeveler, numberOfClassesToTrack)
+    // Map.addLayer(theLCMapExplodedAndLeveled, {}, "336b.starting probs")
+
+    return (theLCMapExplodedAndLeveled);
+}
+
+function afn_LevelInitialLCExploded(theLCMapExploded, thisrunsInitializingLeveler, numberOfClassesToTrack) {
+    // implement theLCMapExploded * thisrunsInitializingLeveler + (1-thisrunsInitializingLeveler)/numberOfClassesToTrack
+    var levelingMinimumNumeratorPart1 = thisrunsInitializingLeveler.multiply(-1)
+    var levelingMinimumNumerator = levelingMinimumNumeratorPart1.add(1)
+    var levelingMinimum = levelingMinimumNumerator.divide(numberOfClassesToTrack)
+
+    var theRet = theLCMapExploded.multiply(thisrunsInitializingLeveler).add(levelingMinimum);
+    //print ("336.starting probs", theRet)
+    return (theRet)
+}
+
+
+// function afn_dayIRebalancingV2(probStackToLevel, balanceFactor, numberOfClassesToTrack) {
+//     // called V2 because it does the rebalancing in every pixel and treats which pixels to update outside this function.
+//     probStackToLevel = ee.Image(probStackToLevel)
+//     var minimumProbToAddDaily = (1 - balanceFactor) / (numberOfClassesToTrack)
+//     return (probStackToLevel.multiply(balanceFactor).add(minimumProbToAddDaily))
+// }
+
+function afn_dayIRebalancingV3(probStackToLevel, balanceFactor, minimumProbToAddDaily) {
+    probStackToLevel = ee.Image(probStackToLevel)
+    return (probStackToLevel.multiply(balanceFactor).add(minimumProbToAddDaily))
+}
+
+
+
+function afn_create1DTransitionArrayImageFromHardCodedTruth(oneEvent, anyDampenedTruthTable, listOfEventClassesFrom0, condStackLabel) {
+    // accesses an already-existing 2d hardcoded truth table.
+    // index the rows of that table based on the oneEvent value
+    // Returns a 1D array image
+
+    var TTasList = ee.List(anyDampenedTruthTable) //
+    // Now, pull out the right set of conditional values based on the oneEvent value.
+    var TruthTableRowToArrayImage = ee.Image(oneEvent).remap(listOfEventClassesFrom0, TTasList).rename([condStackLabel])
+
+    return (TruthTableRowToArrayImage)
+}
+
+
+
+function afn_create1DTransitionArrayImageFromDynamicTruth(oneEvent, anyDampenedTruthTable, listOfEventClassesFrom0, condStackLabel) {
+    // accesses a passed-in already-dampened truth table.
+    // index the rows of that table based on the oneEvent value
+    // Returns a 1D array image
+    listOfEventClassesFrom0 = ee.List(listOfEventClassesFrom0)
+
+    function afn_sliced2DtoRemappable(oneSlicedTruthTable2D) {
+        // the following works: treat the table by casting to array, then to list, then map over
+        // the list and return each row as an array.  Seems crazy but works!
+        var the2dAsList = ee.Array(oneSlicedTruthTable2D).toList()
+        var the2DTransition = the2dAsList.map(function(l) {
+            return ee.Array(l)
+        })
+        return (the2DTransition)
+    }
+    var anyDampenedTruthTableAsListOfArrays = afn_sliced2DtoRemappable(anyDampenedTruthTable)
+
+    // Now, pull out the right set of conditional values based on the oneEvent value.
+    var TruthTableRowToArrayImage = ee.Image(oneEvent).remap(listOfEventClassesFrom0, anyDampenedTruthTableAsListOfArrays).rename([condStackLabel])
+
+    return (TruthTableRowToArrayImage)
+}
+
+function afn_extractNamedSlot(theMBStack, layerName) {
+    return ee.Image(theMBStack).select(layerName);
+}
+
+function afn_overwriteNamedSlot(theMBStack, layerValues, layerName) {
+    return ee.Image(theMBStack).addBands(layerValues, [layerName], true); // it overwrites bc it is parameterized as 'true'
+}
+
+// function afn_getMaxAndClassFromArrayVec(thearrayimage,imageOfLayersOfIntegers, BULCconfidenceLabel, BULCLayerLabel) {
+//     // built initially from an online question from JC answered by Noel,
+//     // and then adapted.
+//     print ("in afn_getMaxAndClassFromArrayVec")
+//     var maxindex = ee.Image(thearrayimage).arrayArgmax()
+//     print("maxindex", maxindex)
+//     var max = ee.Image(thearrayimage).arraySort().arraySlice(0, -1)
+//     print("maxvalue", max)
+//     print ("leaving afn_getMaxAndClassFromArrayVec")
+
+//     return {
+//         maxvalue: max.arrayFlatten([
+//             [BULCconfidenceLabel]
+//         ])
+//         , maxclass: maxindex.arrayFlatten([
+//             [BULCLayerLabel]
+//         ])
+//     };
+// }
+
+function afn_buildStartProbs(bbiidd) {
+    //  print("66432.building start probs", bbiidd)
+    // unpack the parameter dictionary
+    var initializationApproach = bbiidd.initializationApproach
+    // print(initializationApproach)
+    var initializingLeveler = bbiidd.initializingLeveler
+    // print(initializingLeveler)
+    var baseLandCoverImage = bbiidd.baseLandCoverImage
+    // print(baseLandCoverImage)
+    var numberOfClassesToTrack = bbiidd.numberOfClassesToTrack
+    // print(numberOfClassesToTrack)
+    var defaultStudyArea = bbiidd.defaultStudyArea
+    // print(defaultStudyArea)
+    var classNameList = bbiidd.classNameList
+    // print(classNameList)
+    var ProbsLabel = bbiidd.ProbsLabel
+    // print(ProbsLabel)
+    // var SPECIALinitializingLeveler = bbiidd.SPECIALinitializingLeveler
+
+    // var SPECIALnumberOfClassesToTrack = bbiidd.SPECIALnumberOfClassesToTrack
+
+    // unpack the parameter dictionary
+
+
+    // first, we'll just do the base map set up of those probabilities.
+    if (initializationApproach === "F") { // F meaning a first run image.
+        // initializationApproachParameter1 : holds the base image used to initialize the land cover map.
+        // initializationApproachParameter2: holds the comparison layer to start (if Overlaying). can be different than the initialization.
+        // see below these ifs for the comparison layer code.
+        print("Working with base land cover map...")
+        var currentProbsArrayImg = ee.Image(afn_createPriorsFromLandcoverMap(initializingLeveler, baseLandCoverImage, numberOfClassesToTrack, ProbsLabel))
+        // Map.addLayer(currentProbsArrayImg,{},"q13435.currentProbsArrayImg")
+
+        var currentProbs = currentProbsArrayImg.rename(ProbsLabel) //.clip(defaultStudyArea);
+        // Map.addLayer(currentProbs,{},"q13435b.current probs")
+        // print("set.")
+    }
+    if (initializationApproach === "A") { // A meaning Read from Asset.
+        // initializationApproachParameter1: holds the string name of the asset with the ending probabilities from an earlier run
+        // initializationApproachParameter2: holds the string name of the asset with the ending comparison layer from an earlier run
+
+        // read an asset. Asset name comes in initializationApproachParameter1 as a string..
+        var currentProbsMultiBand = afn_ImportMultiBandAssetFromEarlierIteration(initializationApproachParameter1, classNameList);
+        print("currentProbsMultiBand from imported probability asset", currentProbsMultiBand)
+        var currentProbs = ee.Image(currentProbsMultiBand).toArray(0).rename(ProbsLabel) //.clip(defaultStudyArea);
+    }
+    if (initializationApproach === "S") { // S meaning 'sequential' from an iterate inside this same run that hasn't been saved to an asset.
+        // serial input.  will be sent the old prior probs in inputOptional as a multi-band.
+        // here AccumulatingAnswer will be sent in import.  the probs are stored as an array there so no need to cast them after.
+
+        // initializationApproachParameter1 : holds the computed object from within this run. used for chaining iterates. Contains iterim latest
+        // probabilities and latest comparison layer.
+        // initializationApproachParameter2: null. Not used.
+
+        initializationApproachParameter1 = ee.Image(initializationApproachParameter1) // here it is a structure made from an earlier call like this.
+        print("2164.getting currentProbs in Serial Input")
+        var currentProbs = afn_extractNamedSlot(initializationApproachParameter1, ProbsLabel)
+        print("2165.currentProbs in Serial Input", currentProbs)
+        Map.addLayer(currentProbs, {}, "2349s.Beginning Probability MultiBand", true, 0)
+
+    }
+    return (currentProbs)
+
+}
+
+function afn_buildComparisonLayer(cciidd) {
+
+    // unpack the parameter dictionary
+    var transitionCreationMethod = cciidd.transitionCreationMethod
+    var comparisonLayerLabel = cciidd.comparisonLayerLabel
+    var initializationApproach = cciidd.initializationApproach
+    var initializationApproachParameter1 = cciidd.initializationApproachParameter1
+    var firstComparisonImage = cciidd.firstComparisonImage
+    var defaultStudyArea = cciidd.defaultStudyArea
+    // done unpacking the parameter dictionary
+
+
+
+
+    // Now, develop the comparison layer if it is needed.
+    if (transitionCreationMethod === "C") { //  meaning the transitions use a custom-passed matrix. We don't need the comparison layer. we'll set it to -1.
+        var theComparisonLayer = ee.Image(-1).rename(comparisonLayerLabel)
+    }
+
+    if (transitionCreationMethod === "D") { //  meaning the transitions use the identify matrix. We don't need the comparison layer. we'll set it to -1.
+        var theComparisonLayer = ee.Image(-1).rename(comparisonLayerLabel)
+    }
+
+    // If we are doing the overlay approach
+    if (transitionCreationMethod === "V") { // V meaning we are doing overlays. We need to know more. Is this a first run or a continuing, or an asset read?
+        if (initializationApproach === "F") { //  meaning a first run image.
+            // in this case, it's in another parameter
+            var theComparisonLayer = ee.Image(firstComparisonImage).rename([comparisonLayerLabel]) //.clip(defaultStudyArea)
+        }
+        if (initializationApproach === "A") { //  meaning Read from Asset.
+            // initializationApproachParameter1: holds the string name of the asset with the ending probabilities from an earlier run
+            // initializationApproachParameter2: holds the string name of the asset with the ending comparison layer from an earlier run
+
+            // Again, read an asset for the comparison layer. comes in initializationApproachParameter2 as a string..
+            var theComparisonLayer = afn_ImportMultiBandAssetFromEarlierIteration(initializationApproachParameter2, [comparisonLayerLabel])
+            print("importing Comparison Layer from previous iteration with name: " + initializationApproachParameter2)
+        }
+        if (initializationApproach === "S") { // S meaning 'sequential' from an iterate inside this same run that hasn't been saved to an asset.
+            // serial input.  will be sent the old prior probs in inputOptional as a multi-band.
+            // here AccumulatingAnswer will be sent in import.  the probs are stored as an array there so no need to cast them after.
+
+            // initializationApproachParameter1 : holds the computed object from within this run. used for chaining iterates. Contains iterim latest
+            // probabilities and latest comparison layer.
+            var theComparisonLayer = afn_extractNamedSlot(notImplementedYet, comparisonLayerLabel)
+        }
+    }
+    return (theComparisonLayer)
+}
+
+function afn_InitializeIteratePackage(iidd) {
+    // a key part of this function is to initialize the variable accumulatingAnswer, principally
+    // using the values sent in to this function.
+    // comments provided by Gemini V1.5
+
+    // It says this is the structure of that variable accumulatingAnswer. I think it's either basically or totally right!
+    // Band/Property        Data Type         Description
+    // --------------------- -------------------- ---------------------------------------------------------------------------------------------------------
+    // ProbsLabel            ee.Array       Array of probabilities for each land cover class at each pixel.
+    // comparisonLayerLabel   ee.Image       Data used for overlay-based transition matrix generation, or a placeholder if not used.
+    // TotalImageCounterLabel ee.Image       Image where each pixel value represents the total number of events processed across the whole study area.
+    // PerPixelImageCounterLabel ee.Image      Image where each pixel value represents the number of valid events observed at that pixel.
+    // iter                 ee.Image       Holds the iteration number for each time step if RecordIterationNumberAtEachTimeStep is True
+    // Event                ee.Image       Holds the Event for each time step if RecordEventsAtEachTimeStep is True
+    // conditionalStack       ee.Array       Holds the conditionals for each time step if RecordConditionalsAtEachTimeStep is True
+    // BULCclassification      ee.Image       Holds the BULC layer for each time step if RecordBULCLayersAtEachTimeStep is True
+    // BULCconfidence         ee.Image       Holds the Confidence layer for each time step if RecordConfidenceAtEachTimeStep is True
+    // *Probability bands*    ee.Image       Holds the Probabilities for each class at each time step if RecordProbabilitiesAtEachTimeStep is True
+    // globalCounterPropertyName Property (Number) Integer representing the current iteration index.
+    // --------------------- -------------------- ---------------------------------------------------------------------------------------------------------
+    // --------------------- -------------------- ---------------------------------------------------------------------------------------------------------
+
+    // unpack the incoming parameter dictionary
+    var initializingLeveler = iidd.initializingLeveler
+    // var SPECIALinitializingLeveler = iidd.SPECIALinitializingLeveler
+    var transitionCreationMethod = iidd.transitionCreationMethod
+    var numberOfClassesToTrack = iidd.numberOfClassesToTrack
+
+    // var SPECIALnumberOfClassesToTrack = iidd.SPECIALnumberOfClassesToTrack
+
+    var defaultStudyArea = iidd.defaultStudyArea
+    var classNameList = iidd.classNameList
+    var ProbsLabel = iidd.ProbsLabel
+    var comparisonLayerLabel = iidd.comparisonLayerLabel
+    var TotalImageCounterLabel = iidd.TotalImageCounterLabel
+    var PerPixelImageCounterLabel = iidd.PerPixelImageCounterLabel
+    var condStackLabel = iidd.condStackLabel
+    var RecordProbabilitiesAtEachTimeStep = iidd.RecordProbabilitiesAtEachTimeStep
+    var initializationApproach = iidd.initializationApproach
+    // should be in an ifff
+    var baseLandCoverImage = iidd.baseLandCoverImage
+    var firstComparisonImage = iidd.firstComparisonImage
+    var globalCounterPropertyName = iidd.globalCounterPropertyName
+    var RecordBULCLayersAtEachTimeStep = iidd.RecordBULCLayersAtEachTimeStep
+    var RecordConfidenceAtEachTimeStep = iidd.RecordConfidenceAtEachTimeStep
+    var BULCconfidenceLabel = iidd.BULCconfidenceLabel
+    var BULCLayerLabel = iidd.BULCLayerLabel
+    // done unpacking the incoming parameter dictionary
+
+    // Build the start probs parameter dictionary.
+    var bbiidd = {}
+    // Given a weird name
+    // in case you want to replace-all the reference to it later.
+    bbiidd.initializationApproach = initializationApproach
+    bbiidd.initializingLeveler = initializingLeveler
+    // bbiidd.SPECIALinitializingLeveler = SPECIALinitializingLeveler
+    // bbiidd.SPECIALnumberOfClassesToTrack = SPECIALnumberOfClassesToTrack
+
+    bbiidd.baseLandCoverImage = baseLandCoverImage
+    bbiidd.numberOfClassesToTrack = numberOfClassesToTrack
+    bbiidd.defaultStudyArea = defaultStudyArea
+    bbiidd.classNameList = classNameList
+    bbiidd.ProbsLabel = ProbsLabel
+    // Done building the start probs parameter dictionary.
+    // print("bbaddsaf", bbiidd)
+    var currentProbs = afn_buildStartProbs(bbiidd)
+
+    // print("2349.currentProbs after being set", currentProbs)
+
+    // Map.addLayer(currentProbs, {}, "2349-all.Beginning Probability MultiBand", true, 0)
+
+    var accumulatingAnswer = currentProbs;
+
+    var cciidd = {} // the comparison layer creation parameter dictionary. given a weird name
+    // in case you want to replace-all the reference to it later.
+    cciidd.transitionCreationMethod = transitionCreationMethod
+    cciidd.comparisonLayerLabel = comparisonLayerLabel
+    cciidd.initializationApproach = initializationApproach
+    // should be in an ifff
+    cciidd.baseLandCoverImage = baseLandCoverImage
+    cciidd.firstComparisonImage = firstComparisonImage
+    cciidd.defaultStudyArea = defaultStudyArea
+
+
+    print("Building the first comparison layer")
+    var theComparisonLayer = afn_buildComparisonLayer(cciidd)
+
+
+
+    var accumulatingAnswer = accumulatingAnswer.addBands(theComparisonLayer); // puts the comparison layer, whatever it is,  into the right
+    print("Built the first comparison layer")
+    // Map.addLayer(accumulatingAnswer, {}, "Bare-bones accumulatingAnswer at construction")
+    // print(accumulatingAnswer, "Bare-bones accumulatingAnswer at construction")
+
+    // per-pixel Image counters
+
+    var theTotalImageCounter = ee.Image(0).rename([TotalImageCounterLabel]);
+    var thePerPixelImageCounter = ee.Image(0).rename([PerPixelImageCounterLabel]);
+
+    accumulatingAnswer = accumulatingAnswer.addBands(theTotalImageCounter, [TotalImageCounterLabel], false); // puts the initial counter value on the stack
+    accumulatingAnswer = accumulatingAnswer.addBands(thePerPixelImageCounter, [PerPixelImageCounterLabel], false); // puts the initial counter value on the stack
+
+    // Image counter for pulling from arrays inside iterates. Attached as a property to the accumulating image.
+    accumulatingAnswer = accumulatingAnswer.set(globalCounterPropertyName, 0)
+    // Map.addLayer(accumulatingAnswer, {}, "2349433-all.Beginning Probability MultiBand", true, 0)
+
+
+    // now let's write these initial probabilities onto the *end* of the layers of probabilities, if it's the first time through.
+
+
+    if (initializationApproach === "F") { // B meaning 'base' image.
+        if (RecordProbabilitiesAtEachTimeStep) {
+            // print("recording initial probs")
+            // flatten it for putting in the structure
+            var currentProbsMultiBand = currentProbs.arrayFlatten([classNameList])
+            var accumulatingAnswer = accumulatingAnswer.addBands(currentProbsMultiBand);
+        }
+    }
+    if (initializationApproach === "A") { // A meaning Read from Asset.
+        // But wait- should we write that to the structure?  Maybe not, since it'd be likely to be duplicated when we assembled
+        // the string of assembled probabilities.
+    } // do nothing w/r/t those retrieved probabilities to the structure. Can be changed later.
+    if (initializationApproach === "S") { // S meaning a Serial continuation of a previous iteration within this same run.
+        // But wait- should we write that to the structure?  Maybe not, since it'd be likely to be duplicated when we assembled
+        // the string of assembled probabilities.
+    } // do nothing w/r/t those retrieved probabilities to the structure. Can be changed later.
+
+
+
+    // print(accumulatingAnswer, "AccumulatingAnswer with empty per-pixel image counters")
+    // Map.addLayer(accumulatingAnswer, {}, "AccumulatingAnswer with empty image counters")
+
+    // if we want to have a maxclass and confidence value recorded, we need to record it here for the 0th iteration. else the
+    // labels on the layers are inconsistent.
+    if (RecordBULCLayersAtEachTimeStep) {
+        var BULCposterior = currentProbs.arrayArgmax().arrayFlatten([
+            [BULCLayerLabel]
+        ]).add(1) // add 1 bc argmax returns on 0 scale.
+        //Map.addLayer(BULCposterior.randomVisualizer(), {}, "Initial BULC class random color", false, 1)
+        //        Map.addLayer(BULCposterior.byte(), {min:1, max:numberOfClassesToTrack}, "Final BULC class")
+        accumulatingAnswer = accumulatingAnswer.addBands(BULCposterior, [BULCLayerLabel], false) // write posterior probs into the array image at slot 0
+    }
+    if (RecordConfidenceAtEachTimeStep) {
+        var BULCConfidence1DArray = currentProbs.arrayReduce(ee.Reducer.max(), [0]).select(0)
+        // Map.addLayer(BULCConfidence1DArray, {}, "BULCConfidence")
+        // var BULCConfidence0D = BULCConfidence1DArray.select(0).arrayProject([0]).rename([BULCconfidenceLabel]) //.arrayFlatten([[BULCconfidenceLabel]])//.arrayGet([0])
+        var BULCConfidence0D = BULCConfidence1DArray.reduce(ee.Reducer.max()).arrayFlatten([
+            ['BULCconfidenceLabel']
+        ]) //.rename([BULCconfidenceLabel])
+        //BULCConfidence0D = BULCConfidence0D.arrayFlatten([[BULCconfidenceLabel]])
+
+        // Map.addLayer(BULCConfidence0D, {}, "BULCConfidence0D")
+        accumulatingAnswer = accumulatingAnswer.addBands(BULCConfidence0D) //, [BULCconfidenceLabel], false) // write posterior probs into the array image at slot 0
+    }
+    // print(accumulatingAnswer, "AccumulatingAnswer with RecordBULCLayersAtEachTimeStep")
+    // Map.addLayer(accumulatingAnswer, {}, "AccumulatingAnswer with RecordBULCLayersAtEachTimeStep")
+
+    // var theStub = afn_makeJunk3D(1 + numberOfClassesToTrack, numberOfClassesToTrack, condStackLabel)
+    // Map.addLayer(theStub,{}, "empty")
+    // accumulatingAnswer = accumulatingAnswer.addBands(theStub); // puts the slot for the conditionals on the stack
+    // Map.addLayer(accumulatingAnswer, {}, "AccumulatingAnswer with space for Conditionals")
+    // accumulatingAnswer = accumulatingAnswer.set('aaa', 'hello.aaa')
+
+    return (accumulatingAnswer)
+}
+
+// function afn_assembleTablesWithParametersByIterate(eventsAsImageCollection, theAssembledTableStructure, comparisonLayerLabel, defaultStudyArea, scaleOfReduction, numberOfClassesToTrack, condStackLabel) {
+//     function afn_bindingForAssembleTables(image, state) {
+//         return afn_assembleOneTableDec22020(image, state, comparisonLayerLabel, defaultStudyArea, scaleOfReduction,
+//             numberOfClassesToTrack, condStackLabel)
+//     }
+//     var theBoundIterate = (ee.ImageCollection(eventsAsImageCollection).iterate(afn_bindingForAssembleTables, theAssembledTableStructure))
+//     return (theBoundIterate)
+// }
+
+
+function afn_incrementGlobalImageCounter(accumulatingAnswer, globalCounterPropertyName) {
+    // accumulatingAnswer = accumulatingAnswer.set('numberOfImagesSoFar', 42)
+    var onevalString = accumulatingAnswer.get(globalCounterPropertyName)
+    var oneValue = ee.Number(onevalString)
+    oneValue = oneValue.add(1)
+    // accumulatingAnswer = accumulatingAnswer.set('biggernumber', oneValue)
+    accumulatingAnswer = accumulatingAnswer.set(globalCounterPropertyName, oneValue)
+    return (accumulatingAnswer)
+}
+
+function afn_hiddenBULCIterateWithOptions(oneEvent, accumulatingAnswer, ProbsLabel, EventLabel, comparisonLayerLabel, TotalImageCounterLabel, PerPixelImageCounterLabel, RecordIterationNumberAtEachTimeStep, RecordEventsAtEachTimeStep, RecordConditionalsAtEachTimeStep, truthTableStack, transitionCreationMethod, listOfEventClassesFrom0, posteriorLeveler, posteriorMinimum, numberOfClassesToTrack, RecordProbabilitiesAtEachTimeStep, classNameList, transitionLeveler, globalCounterPropertyName, RecordBULCLayersAtEachTimeStep, RecordConfidenceAtEachTimeStep, BULCLayerLabel, BULCconfidenceLabel, condStackLabel, RecordFinalClass) {
+    //print("2243.in hidden bulc iterate")
+    accumulatingAnswer = ee.Image(accumulatingAnswer)
+
+    oneEvent = ee.Image(oneEvent)
+    // hack assuming all values are valid
+    var oneEventValidValues = oneEvent
+    // mask that event so that no calculations are done outside that event.
+    // var oneEventValidValues = afn_findValidValues(oneEvent)
+    // oneEvent = oneEvent.updateMask(oneEventValidValues)
+
+
+    // slice prior probabilities (up to this point) from running answer
+    var currentProbs = afn_extractNamedSlot(accumulatingAnswer, ProbsLabel);
+    var theComparisonLayer = afn_extractNamedSlot(accumulatingAnswer, comparisonLayerLabel);
+
+
+
+    /////////////////////////////////////////////
+    // UPDATING BOTH THE IMAGE COUNTERS across the whole study area and IN EACH PIXEL
+    /////////////////////////////////////////////
+
+    //var theTotalImageCounter = accumulatingAnswer.select(2)
+    var theTotalImageCounter = afn_extractNamedSlot(accumulatingAnswer, TotalImageCounterLabel);
+    var thePerPixelImageCounter = afn_extractNamedSlot(accumulatingAnswer, PerPixelImageCounterLabel);
+    // accumulatingAnswer = accumulatingAnswer.addBands(thePerPixelImageCounter);
+
+
+    // add 1 to the global image counter, in every pixel of the study area.
+    var theTotalImageCounter = theTotalImageCounter.add(1).rename([TotalImageCounterLabel]);
+    // write it back to the structure
+    // accumulatingAnswer = accumulatingAnswer.addBands(ee.Image(222));
+    //   accumulatingAnswer = accumulatingAnswer.addBands(theTotalImageCounter.add(100000).rename([TotalImageCounterLabel]));
+
+    //var thevalue = theTotalImageCounter.add(1000).rename([TotalImageCounterLabel])
+    //    accumulatingAnswer = accumulatingAnswer.addBands(thevalue,[TotalImageCounterLabel],true);
+    accumulatingAnswer = afn_overwriteNamedSlot(accumulatingAnswer, theTotalImageCounter, TotalImageCounterLabel)
+    if (RecordIterationNumberAtEachTimeStep) {
+        accumulatingAnswer = accumulatingAnswer.addBands(theTotalImageCounter.rename(["iter"])) // write to structure, for testing
+    }
+
+    // add 1 to the local image counter, in every pixel with a valid value in this iteration.
+    thePerPixelImageCounter = thePerPixelImageCounter.where(oneEventValidValues, thePerPixelImageCounter.add(1)).rename([PerPixelImageCounterLabel]);
+    accumulatingAnswer = afn_overwriteNamedSlot(accumulatingAnswer, thePerPixelImageCounter, PerPixelImageCounterLabel)
+
+    // getting the Event this iteration.  Note that it is passed in on the stack of images used for the iterate. Here it is called oneEvent.
+    // below we write it to the structure at the bottom, for testing.
+    if (RecordEventsAtEachTimeStep) {
+        accumulatingAnswer = accumulatingAnswer.addBands(oneEvent.mask(oneEventValidValues).rename([EventLabel]), [EventLabel], false)
+    }
+
+    if (transitionCreationMethod === "C") {
+        // in this case, truthTableStack arrives as a single custom-passed matrix with as many rows as the max classes in events.
+        // this can be dampened using the transition leveler, if desired
+        //print("3316. truth table stack", truthTableStack)
+        var transitionArrayImageRescaledAndDampened = afn_create1DTransitionArrayImageFromDynamicTruth(oneEvent, truthTableStack,
+            listOfEventClassesFrom0, condStackLabel)
+    }
+
+    if (transitionCreationMethod === "D") {
+        // in this case, truthTableStack arrives as a single dampened identity matrix with a dummy row of 1s on top.
+        //var oneDampenedTruthTable = truthTableStack
+        var transitionArrayImageRescaledAndDampened = afn_create1DTransitionArrayImageFromHardCodedTruth(oneEvent, truthTableStack,
+            listOfEventClassesFrom0, condStackLabel)
+        accumulatingAnswer = accumulatingAnswer.set('LatestTransition', truthTableStack)
+    }
+
+    if (transitionCreationMethod === "V") {
+        // pull out one from the stack of truth tables
+        // here, the truth table stack is a stack of truth tables. each is a dampened matrix that had a row of 1s put on top.
+        // this was done before ever entering the iterate. So here we just pull the rightly indexed one out of the stack.
+        var whichDynamicTableToGet = ee.Number(accumulatingAnswer.get(globalCounterPropertyName))
+        //print(whichDynamicTableToGet)
+
+        var oneDampenedTruthTable = ee.List(truthTableStack).get(whichDynamicTableToGet)
+        var transitionArrayImageRescaledAndDampened = afn_create1DTransitionArrayImageFromDynamicTruth(oneEvent, oneDampenedTruthTable,
+            listOfEventClassesFrom0, condStackLabel)
+        accumulatingAnswer = accumulatingAnswer.set('LatestTransition', oneDampenedTruthTable)
+        //accumulatingAnswer = accumulatingAnswer.set(ee.List(['LatestTransition']).cat(ee.Number.parse(whichDynamicTableToGet)), oneDampenedTruthTable)
+    }
+    // now, however it was made, pull from the right row of that table to make the transition array image.
+    // accumulatingAnswer = accumulatingAnswer.set(ee.String.encodeJSON(ee.Number.parse(whichDynamicTableToGet)), oneDampenedTruthTable)
+    // accumulatingAnswer = accumulatingAnswer.set(ee.String.encodeJSON(whichDynamicTableToGet), oneDampenedTruthTable)
+
+
+    // other accessing the table here
+    // At this point, the transition array image is created.  Write it if requested
+    if (RecordConditionalsAtEachTimeStep) {
+        accumulatingAnswer = accumulatingAnswer.addBands(
+            transitionArrayImageRescaledAndDampened) //, conditionalsNameList, false) // write to bottom of the stack as an array band. Intended for testing.
+    }
+
+    // Bayes application here
+    // Handy Bayes one-liner
+    var posteriorProbsValidPixels1D = currentProbs.mask(oneEventValidValues).multiply(transitionArrayImageRescaledAndDampened).divide(currentProbs
+        .arrayDotProduct(transitionArrayImageRescaledAndDampened))
+    // for testing: accumulatingAnswer = accumulatingAnswer.addBands(posteriorProbsValidPixels1D, [ProbsLabel]) // write posterior probs into the array image at slot 0
+
+    // rebalance probabilities
+    // dampen the resulting probs
+    posteriorProbsValidPixels1D = ee.Image(afn_dayIRebalancingV3(posteriorProbsValidPixels1D, posteriorLeveler, posteriorMinimum))
+
+
+    // burn the pixel with updated values onto the prior probs. Result should have value at every pixel.
+    var posteriorProbsAllPixels1D = ee.Image(currentProbs.where(oneEventValidValues, posteriorProbsValidPixels1D)).rename([ProbsLabel])
+
+    accumulatingAnswer = accumulatingAnswer.addBands(posteriorProbsAllPixels1D, [ProbsLabel], true) // write posterior probs into the array image at slot 0
+    if (RecordProbabilitiesAtEachTimeStep) {
+        accumulatingAnswer = accumulatingAnswer.addBands(posteriorProbsAllPixels1D.arrayFlatten([classNameList])) // write posterior probs into the array image at slot 0
+    }
+
+    if (RecordBULCLayersAtEachTimeStep) {
+        var BULCposterior = posteriorProbsAllPixels1D.arrayArgmax().arrayFlatten([
+            [BULCLayerLabel]
+        ]).add(1) // add 1 bc argmax returns on 0 scale.
+        accumulatingAnswer = accumulatingAnswer.addBands(BULCposterior, [BULCLayerLabel], false) // write posterior probs into the array image at slot 0
+    }
+    if (RecordConfidenceAtEachTimeStep) {
+        var BULCConfidence1DArray = posteriorProbsAllPixels1D.arrayReduce(ee.Reducer.max(), [0]).select(0)
+        var BULCConfidence0D = BULCConfidence1DArray
+            .reduce(ee.Reducer.max()).arrayFlatten([
+                ['BULCconfidenceLabel']
+            ])
+        accumulatingAnswer = accumulatingAnswer.addBands(BULCConfidence0D) //, [BULCconfidenceLabel], false) // write posterior probs into the array image at slot 0
+    }
+
+    //increase the counter that indicates how many images we have seen so far.
+    accumulatingAnswer = ee.Image(afn_incrementGlobalImageCounter(accumulatingAnswer, globalCounterPropertyName))
+
+    return accumulatingAnswer
+}
+
+
+
+function runBULCAlgorithm(BULCargumentDictionaryPlus) {
+    print("//////////////////////////////////////////")
+    print("////  Welcome to the BULC algorithm!  ////")
+    print("//////////////////////////////////////////")
+
+    // pull out the main component of the dictionary.
+    print("1.Arguments to BULC", BULCargumentDictionaryPlus)
+    var BULCargumentDictionary = ee.Dictionary(BULCargumentDictionaryPlus.BULCargumentDictionary)
+
+    // Parse the parameter dictionary.
+    var eventsAsImageCollection = ee.ImageCollection(BULCargumentDictionary.get("eventsAsImageCollection"))
+    // Map.addLayer(eventsAsImageCollection,{}, "493.events")
+    var initializingLeveler = BULCargumentDictionary.getNumber("initializingLeveler")
+    // print("5551", initializingLeveler)
+
+    // transition leveler only needed in certain settings, so it's tempting to get it here, but
+    // I'll move it from the top to the conditions where it is needed.
+
+    var posteriorLeveler = BULCargumentDictionary.getNumber("posteriorLeveler")
+    // print("5553", posteriorLeveler)
+    var posteriorMinimum = BULCargumentDictionary.getNumber("posteriorMinimum")
+    // print("555b", posteriorMinimum)
+
+
+    var defaultStudyArea = ee.Geometry(BULCargumentDictionary.get("defaultStudyArea"))
+    // print("5554.studyarea", defaultStudyArea)
+    // Map.addLayer(defaultStudyArea.bounds(),{},"5554", false,0)
+
+
+
+    var maxClassInEventImages = BULCargumentDictionary.getNumber("maxClassInEventImages")
+    //print("5553", maxClassInEventImages)
+
+    var numberOfClassesToTrack = BULCargumentDictionary.getNumber("numberOfClassesToTrack")
+    //print("5553", numberOfClassesToTrack)
+
+
+
+    var initializationApproach = BULCargumentDictionaryPlus.initializationApproach;
+    // var initializationApproach = BULCargumentDictionary.get("initializationApproach")
+    //print("5555442", initializationApproach)
+
+    // var initializationApproachParameter1 = BULCargumentDictionary.initializationApproachParameter1
+    // var initializationApproachParameter2 = BULCargumentDictionary.initializationApproachParameter2
+
+    if (initializationApproach === "F") { // meaning a first run image.
+        // need param 1
+        //    print("A first run of BULC, (i.e., not a continuation")
+        var baseLandCoverImage = BULCargumentDictionaryPlus.baseLandCoverImage
+        // var SPECIALnumberOfClassesToTrack = BULCargumentDictionaryPlus.SPECIALnumberOfClassesToTrack
+    }
+    if (initializationApproach === "A") { // A meaning Read from Asset.
+        // need param 1
+        var initializationApproachParameter1 = notImplementedYet //BULCargumentDictionary.initializationApproachParameter1
+    }
+    if (initializationApproach === "S") { // S meaning 'sequential' from an iterate inside this same run that hasn't been saved to an asset.
+        // need param 1
+        var initializationApproachParameter1 = notImplementedYet //BULCargumentDictionary.initializationApproachParameter1
+    }
+
+
+    var transitionCreationMethod = BULCargumentDictionaryPlus.transitionCreationMethod
+    if (transitionCreationMethod === "C") {
+        // then I have to pick up the customized transition table.
+        var customTransitionMatrix = BULCargumentDictionary.get("customTransitionMatrix")
+        // print("cccccustom transition matrix", customTransitionMatrix)
+        // transition Leveler
+        var transitionLeveler = BULCargumentDictionary.getNumber("transitionLeveler")
+        // print("9898d.trans leveler", transitionLeveler)
+
+        // transition minimum
+        var transitionMinimum = BULCargumentDictionary.getNumber("transitionMinimum")
+        // print("9898d.trans min", transitionMinimum)
+
+    }
+
+    if (transitionCreationMethod === "D") {
+        // need to pull the transition leveler and transition minimum
+
+        // transition Leveler
+        var transitionLeveler = BULCargumentDictionary.getNumber("transitionLeveler")
+        // print("9898d.trans leveler", transitionLeveler)
+
+        // transition minimum
+        var transitionMinimum = BULCargumentDictionary.getNumber("transitionMinimum")
+        // print("9898d.trans min", transitionMinimum)
+    }
+
+    if (transitionCreationMethod === "V") {
+        // need to pull the transition leveler, transition minimum, number of points, and stratum image.
+
+        // transition Leveler
+        var transitionLeveler = BULCargumentDictionary.getNumber("transitionLeveler")
+        // print("9898v.trans leveler", transitionLeveler)
+
+        // transition minimum
+        var transitionMinimum = BULCargumentDictionary.getNumber("transitionMinimum")
+        // print("9898V.trans min", transitionMinimum)
+
+        // number of stratified points
+        var numberOfStratifiedPointsForOverlay = BULCargumentDictionary.getNumber("numberOfStratifiedPointsForOverlay")
+        // print("39392", numberOfStratifiedPointsForOverlay)
+
+        // Stratum image.
+        var stratumImage = BULCargumentDictionaryPlus.stratumImage
+        //Map.addLayer(ee.Image(stratumImage),{},"393ad.stratum")
+    }
+
+    if (transitionCreationMethod === "V") { // V meaning we are doing overlays. We need to know more. Is this a first run or a continuing, or an asset read?
+        if (initializationApproach === "F") { // B meaning a first run image.
+            // in this case, it's in initializationApproachParameter2
+            var firstComparisonImage = BULCargumentDictionaryPlus.firstComparisonImage
+            //        Map.addLayer(firstComparisonImage,{},"3333333 first compar")
+            //      print("333333 got comparison image")
+            // var SPECIALinitializingLeveler = BULCargumentDictionaryPlus.SPECIALinitializingLeveler
+        }
+
+        if (initializationApproach === "A") { // A meaning Read from Asset.
+            // in this case, it's in initializationApproachParameter2
+            var initializationApproachParameter2 = notImplementedYet // BULCargumentDictionary.initializationApproachParameter2
+        }
+
+        if (initializationApproach === "S") { // S meaning 'sequential' from an iterate inside this same run that hasn't been saved to an asset.
+            var initializationApproachParameter1 = notImplementedYet //BULCargumentDictionary.initializationApproachParameter1
+        }
+    }
+
+    var RecordIterationNumberAtEachTimeStep = BULCargumentDictionary.get("RecordIterationNumberAtEachTimeStep")
+    //print("32566t2.RecordIterationNumberAtEachTimeStep", RecordIterationNumberAtEachTimeStep)
+    var RecordEventsAtEachTimeStep = BULCargumentDictionary.get("RecordEventsAtEachTimeStep")
+    var RecordProbabilitiesAtEachTimeStep = BULCargumentDictionary.get("RecordProbabilitiesAtEachTimeStep")
+    var RecordConditionalsAtEachTimeStep = BULCargumentDictionary.get("RecordConditionalsAtEachTimeStep")
+
+    var RecordBULCLayersAtEachTimeStep = BULCargumentDictionary.get("RecordBULCLayersAtEachTimeStep")
+    //print("32566t3.RecordBULCLayersAtEachTimeStep", RecordBULCLayersAtEachTimeStep)
+    var RecordConfidenceAtEachTimeStep = BULCargumentDictionary.get("RecordConfidenceAtEachTimeStep")
+
+    var RecordFinalClass = BULCargumentDictionary.get("RecordFinalClass")
+    // var RecordBULCLayersAtEachTimeStep = BULCargumentDictionary.RecordBULCLayersAtEachTimeStep
+    // var RecordConfidenceAtEachTimeStep = BULCargumentDictionary.RecordConfidenceAtEachTimeStep
+    // var RecordFinalClass = BULCargumentDictionary.RecordFinalClass
+
+    // END of parsing the parameter dictionary.
+
+
+
+    //=======================================================================================================
+    /*
+          SECTION 1. Requires
+    */
+    //=======================================================================================================
+    print("Section 1. Importing external modules")
+
+    // var utilityModule = require('users/alemlakes/CommonCode:504.Utilities/504.Utilities');
+    //var afn_javascriptRange = utilityModule.afn_javascriptRange; // not sure why, but needs to be
+    // defined locally. As of now it is only used once, so I'll define it right where it is used.
+    // var afn_addNumberSuffix = utilityModule.afn_addNumberSuffix;
+
+
+
+    //=======================================================================================================
+    /*
+              SECTION 2. MODULE-BASED VARIABLE DEFINITIONS
+    */
+    //=======================================================================================================
+    print("Section 2. Module-based Variable Definitions")
+
+    //=======================================================================================================
+    /*
+              END SECTION 2. MODULE-BASED VARIABLE DEFINITIONS
+    */
+    //=======================================================================================================
+
+    //=======================================================================================================
+    /*
+              SECTION 3. LOCAL VARIABLE DEFINITIONS
+    */
+    //=======================================================================================================
+    print("Section 3. Local Variable Definitions")
+    ////////////////////////////////////
+    //// LABELS /////
+    ////////////////////////////////////
+    var TotalImageCounterLabel = "totalImageCounter"; // increases anytime a new image is processed
+    var PerPixelImageCounterLabel = "perPixelImageCounter"; // increases in a given pixel if a new image is processed and has a valid value in that pixel
+    var BULCconfidenceLabel = "BULCconfidence"
+    var BULCLayerLabel = 'BULCclassification'
+
+    var classNameList = [];
+    var ProbsSelector = 'probCls'
+    var ProbsLabel = 'probabilityArray'
+
+    var condStackLabel = "conditionalStack"
+    //    var CondSelector = 'condCls'
+
+    var comparisonLayerLabel = 'ComparisonLayer'
+    var EventLabel = 'Event'
+
+    var globalCounterPropertyName = 'numberOfImagesSoFar'
+
+    //////////////////////////////////////////
+    //// FLAGS FOR HOW TO DO THE OVERLAY /////
+    //////////////////////////////////////////
+
+    // // Truth tables- how to create them? only one of these should be true at any time.
+    print("Truth Table Creation Method Given Below.");
+
+    if (transitionCreationMethod === "C") {
+        print("Method C: Using a custom transition matrix for truth tables: ", transitionCreationMethod)
+    }
+
+    if (transitionCreationMethod === "D") {
+        print("Method D: Using an identity matrix for truth tables: ", transitionCreationMethod)
+    }
+
+    if (transitionCreationMethod === "V") {
+        // Exactly as first implemented in R for Cardille/Fortin 2016.
+        print("Method V: Overlay consecutive dates: ", transitionCreationMethod)
+    }
+
+
+    //=======================================================================================================
+    /*
+              SECTION 4. LOCAL FUNCTIONS
+    */
+    //=======================================================================================================
+
+    // A function to write out the stack of Classifications or Events to Asset
+    function afn_exportMultiBandImage(multiBandImage, thedescription, theassetId, theScale) {
+        multiBandImage = ee.Image(multiBandImage)
+        Export.image.toAsset({
+            image: multiBandImage,
+            description: thedescription,
+            assetId: theassetId,
+            scale: theScale,
+            region: defaultStudyArea,
+            maxPixels: maxPixelRequestSize
+        })
+    }
+
+
+
+    //=======================================================================================================
+    /*
+              SECTION 5. START OF STATEMENTS
+    */
+    //=======================================================================================================
+
+
+    var listOfEventClassesFrom0 = ee.List.sequence(0, maxClassInEventImages)
+    // print("YYYYY ", maxClassInEventImages)
+    // print("ZZZZZZ ", listOfEventClassesFrom0)
+    // print("AAAAAA ", numberOfClassesToTrack)
+
+
+    // classNameList = afn_addNumberSuffix(ProbsSelector, 1, numberOfClassesToTrack)
+    // classNameList = afn_addNumberSuffix(ProbsSelector, 1, 7)
+
+    var listOfTrackedClassesFrom1 = ee.List.sequence(1, numberOfClassesToTrack)
+
+    classNameList = listOfTrackedClassesFrom1.map(function(num) {
+        return ee.String(ProbsSelector).cat(ee.String(ee.Number(num).int()));
+    });
+
+
+    // print("PPPP.Prob names", classNameList)
+
+    //var conditionalsNameList = []; probably not needed since it is not needed for classNameList?
+    // conditionalsNameList = afn_addNumberSuffix(CondSelector, 1, numberOfClassesToTrack)
+    // print("Cond names", conditionalsNameList)
+
+    // var imageOfLayersOfIntegers = ee.Image(ee.Array(listOfTrackedClassesFrom1))
+
+
+    //print("3315.Initialization approach:", initializationApproach)
+
+    // set up the dictionary for parameters for initializing the iteration package.
+    var iidd = {} //initializeIterateDictionary
+    iidd.initializingLeveler = initializingLeveler
+    // iidd.SPECIALinitializingLeveler = SPECIALinitializingLeveler
+
+    iidd.transitionCreationMethod = transitionCreationMethod
+    iidd.numberOfClassesToTrack = numberOfClassesToTrack
+
+    // iidd.SPECIALnumberOfClassesToTrack = SPECIALnumberOfClassesToTrack
+
+    iidd.defaultStudyArea = defaultStudyArea
+    iidd.classNameList = classNameList
+    iidd.ProbsLabel = ProbsLabel
+    iidd.comparisonLayerLabel = comparisonLayerLabel
+    iidd.TotalImageCounterLabel = TotalImageCounterLabel
+    iidd.PerPixelImageCounterLabel = PerPixelImageCounterLabel
+    iidd.condStackLabel = condStackLabel
+    iidd.RecordProbabilitiesAtEachTimeStep = RecordProbabilitiesAtEachTimeStep
+    iidd.initializationApproach = initializationApproach
+    // should be in an ifff
+    iidd.baseLandCoverImage = baseLandCoverImage
+    iidd.firstComparisonImage = firstComparisonImage
+    iidd.globalCounterPropertyName = globalCounterPropertyName
+    iidd.RecordBULCLayersAtEachTimeStep = RecordBULCLayersAtEachTimeStep
+    iidd.RecordConfidenceAtEachTimeStep = RecordConfidenceAtEachTimeStep
+    iidd.BULCconfidenceLabel = BULCconfidenceLabel
+    iidd.BULCLayerLabel = BULCLayerLabel
+
+
+    var accumulatingAnswer = afn_InitializeIteratePackage(iidd)
+    // Map.addLayer(accumulatingAnswer, {}, "123134. AccumulatingAnswer with precalculated overlays")
+    // print("15631.accum before", accumulatingAnswer)
+
+
+    //************************************************************************************
+    //************************************************************************************
+    // done with setup of the packet sent back and forth to Iterate.
+    //************************************************************************************
+    //************************************************************************************
+
+
+    // Map.addLayer(accumulatingAnswer, {}, "6a. AccumulatingAnswer prior to precalculated overlays")
+    // print(accumulatingAnswer, "6a. AccumulatingAnswer prior to precalculated overlays")
+
+    // // Now, create the conditionals depending on what method we are using.
+    if (transitionCreationMethod === "C") {
+        //   print("3396.in C")
+        //   print("cccc", customTransitionMatrix)
+        //   print(transitionLeveler, transitionMinimum)
+        var truthTableStack = ee.Array(customTransitionMatrix)
+        //             var afn_dampenTruthAndAddDummyRow7 = require('users/alemlakes/CommonCode:510.ArrayOperations/510a.ArrayOperations').afn_dampenTruthAndAddDummyRow7;
+
+        //     var theDamper = ee.Array(customTransitionMatrix).multiply(transitionLeveler).add(transitionMinimum)
+        // print("221556.theRet", theDamper)
+        //             var afn_addDummyRow78 = require('users/alemlakes/CommonCode:510.ArrayOperations/510a.ArrayOperations').afn_addDummyRow78;
+
+
+        var afn_dampenTruthAndAddDummyRow11 = require('users/alemlakes/CommonCode:510.ArrayOperations/510a.ArrayOperations').afn_dampenTruthAndAddDummyRow11;
+        var truthTableStack = afn_dampenTruthAndAddDummyRow11(customTransitionMatrix, transitionLeveler, transitionMinimum)
+
+        // print("3398c.dampenedCustomizedTruthTable", truthTableStack)
+
+    }
+    if (transitionCreationMethod === "D") {
+        // print("3396.in D")
+        // If requested, generate a single globally available hard-coded truth table for use in the iterate
+        var afn_prepareIdentity = require('users/alemlakes/CommonCode:510.ArrayOperations/510a.ArrayOperations').afn_prepareIdentity;
+        // print("got identity function")
+        var identityTruthTable = afn_prepareIdentity(numberOfClassesToTrack)
+        // print("21453", identityTruthTable)
+        var afn_dampenTruthAndAddDummyRow7 = require('users/alemlakes/CommonCode:510.ArrayOperations/510a.ArrayOperations').afn_dampenTruthAndAddDummyRow7;
+        var truthTableStack = afn_dampenTruthAndAddDummyRow7(identityTruthTable, transitionLeveler, transitionMinimum)
+        // print("3398d.dampenedPreMadeHardCodedTruthTable", truthTableStack)
+    }
+    // // only assemble the tables if needed- ie if we are asking to do overlays. Else go straight to iterating Events.
+    if (transitionCreationMethod === "V") {
+        // print("3396.in V")
+        // print("5552", transitionLeveler)
+
+        // print("3423266.numberOfStratifiedPointsForOverlay",numberOfStratifiedPointsForOverlay)
+        // print("preparing to make the tables.")
+        var afn_stratifiedSampleImageCollectionToTransitionStack = require('users/alemlakes/CommonCode:503.Overlays/503a.Module.OverlayBySample').afn_stratifiedSampleImageCollectionToTransitionStack;
+        // print("Loaded BULC Overlaying module.")
+        // we got the comparison layer made either by passing it or by asset retrieval. it's in the initialized structure. extract it.
+        var theComparisonLayer = afn_extractNamedSlot(accumulatingAnswer, comparisonLayerLabel)
+        var stackOfOverlays = afn_stratifiedSampleImageCollectionToTransitionStack(
+            eventsAsImageCollection,
+            theComparisonLayer,
+            stratumImage,
+            numberOfStratifiedPointsForOverlay,
+            maxClassInEventImages,
+            numberOfClassesToTrack,
+            defaultStudyArea,
+            transitionLeveler,
+            transitionMinimum)
+
+        // That returns a bunch of things:
+        //1) sampledStratifiedFeatures. Feature collection for possible output if requested.
+        //sampledStratifiedPointsAsArray: for possible output if requested.
+        //theCrossTabs: theCrossTabs: for possible output if requested.
+        //theProducersAccuracyStack: for direct use.
+        accumulatingAnswer = ee.Image(accumulatingAnswer).set('sampledStratifiedFeatures', stackOfOverlays.sampledStratifiedFeatures)
+        accumulatingAnswer = ee.Image(accumulatingAnswer).set('sampledStratifiedPointsAsArray', stackOfOverlays.sampledStratifiedPointsAsArray)
+        var truthTableStack = stackOfOverlays.theProducersAccuracyStack
+        // print("33434.stack of overlays", truthTableStack)
+
+        // function afn_oneArrayFromStack(truthTableStack, which) {
+        //     var which = ee.Number(which)
+        //     var theArray = ee.Array(truthTableStack)
+        //     return (theArray.slice(0, which, which.add(1)))
+        // }
+
+        function afn_oneElementFromList(truthTableStack, which) {
+            return (truthTableStack.get(which))
+        }
+        //        var oneSlicedTruthTable2D = afn_oneArrayFromStack(truthTableStack, 0)
+        var oneSlicedTruthTable2D = afn_oneElementFromList(truthTableStack, 2)
+        // print("slice 2b", oneSlicedTruthTable2D)
+
+        function afn_sliced2DtoRemappable(oneSlicedTruthTable2D) {
+            // Now I have one array. let's figure out the remap.
+            // use nick's test image of values from 1 to 3.
+            // seems like that's an array. let's convert to list?
+            var the2dAsList = ee.Array(oneSlicedTruthTable2D).toList()
+            // print(the2dAsList, "the2dAsList")
+            // print("mapping")
+            var the2DTransition = the2dAsList.map(function(l) {
+                return ee.Array(l)
+            })
+            return (the2DTransition)
+        }
+        var the2DTransition = afn_sliced2DtoRemappable(oneSlicedTruthTable2D)
+        //var theflat = ee.List(oneSlicedTruthTable2D).flatten()
+        //print(theflat, "flattened single table"
+        //        var the2DTransition = ee.Array(oneSlicedTruthTable2D)
+        // print(the2DTransition, "New: the2DTransition as list of arrays")
+
+        // var randImage0to3 = ee.Image.random().multiply(4).int();
+        // Map.addLayer(randImage0to3, {}, "random")
+        // var testArrayImage = ee.Image(randImage0to3).remap(listOfEventClassesFrom0, the2DTransition).rename(['Conditionals'])
+        // Map.addLayer(testArrayImage, {}, "333.test array")
+        // //        var slice3 = ee.Array(oneSlicedTruthTable2D).slice(0,1,2)
+        //      print("one row", slice3)
+        //        var slice3b = afn_oneArrayFromStack(oneSlicedTruthTable2D, 1)
+        //        print("one row b", slice3b)
+        // print(truthTableStack.slice(0,2,3)).slice(0,1,2)
+        // var truthTableStackArray = ee.Array(ee.List(truthTableStack))
+        // print("33435.stack of overlays as array", truthTableStackArray)
+        theBoundIterate = ee.Image(theBoundIterate).set('theCrossTabs', stackOfOverlays.theCrossTabs)
+        accumulatingAnswer = ee.Image(accumulatingAnswer).set('theCrossTabs', stackOfOverlays.theCrossTabs)
+
+
+    }
+    // end of creating the conditionals.
+    //print(" end of creating the conditionals: ",truthTableStack)
+
+    // let's attach the truth table stack as a property, for potential viewing.
+    accumulatingAnswer = accumulatingAnswer.set('truthTableStack', truthTableStack)
+    // Map.addLayer(accumulatingAnswer, {}, "6b3ddd. AccumulatingAnswer with precalculated overlays")
+    // print("6b3ddd.accum before", accumulatingAnswer)
+
+    //print(accumulatingAnswer, "6b. AccumulatingAnswer after initialization, before processing Events")
+    print("Now we will call BULC.  Everything's assembled.")
+    //************************************************************************************
+    // Bind up these variables and call iterate.
+    //************************************************************************************
+    //=======================================================================================================
+    //     For scoping, need to do this as an embedded function
+    //=======================================================================================================
+    function afn_BULCbinding(image, state) {
+        return afn_hiddenBULCIterateWithOptions(image, state, ProbsLabel, EventLabel, comparisonLayerLabel, TotalImageCounterLabel, PerPixelImageCounterLabel, RecordIterationNumberAtEachTimeStep, RecordEventsAtEachTimeStep, RecordConditionalsAtEachTimeStep, truthTableStack, transitionCreationMethod, listOfEventClassesFrom0, posteriorLeveler, posteriorMinimum, numberOfClassesToTrack, RecordProbabilitiesAtEachTimeStep, classNameList, transitionLeveler, globalCounterPropertyName, RecordBULCLayersAtEachTimeStep, RecordConfidenceAtEachTimeStep, BULCLayerLabel, BULCconfidenceLabel, condStackLabel, RecordFinalClass, posteriorLeveler, posteriorMinimum)
+    }
+
+    // get the image collection from a parameter
+    var theBoundIterate = ee.Image(eventsAsImageCollection.iterate(afn_BULCbinding, accumulatingAnswer))
+    //Map.addLayer(theBoundIterate, {}, "334.iterateresult", false, 1)
+
+    //************************************************************************************
+    // End of bind up these variables and call iterate.
+    //************************************************************************************
+    print("Now we have returned from BULC.")
+
+
+    //theBoundIterate = ee.Image(theBoundIterate).set('bb', 'hello.bb')
+    if (transitionCreationMethod === "V") {
+
+        theBoundIterate = theBoundIterate.set('truthTableStack', truthTableStack)
+    }
+    //************************************************************************************
+    //************************************************************************************
+    // Now, let's assemble some values on request.
+    //************************************************************************************
+    //************************************************************************************
+
+    // gonna leave this out for now.
+    // if (RecordConditionalsAtEachTimeStep) {
+    //     // // Get the Probability layers and put them in their own image.
+    //     var theLayerMatchKey = ".*" + CondSelector + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+    //     print("theLayerMatchKey", theLayerMatchKey)
+
+    //     var allMatchedLayersAsMultiBand = theBoundIterate.select(theLayerMatchKey).clip(defaultStudyArea)
+    //     print("allCondLayersAsMultiBand", allMatchedLayersAsMultiBand)
+
+    //     if (Draw_allConditLayersAsMultiBand){
+    //     Map.addLayer( allMatchedLayersAsMultiBand, {}, "allConditLayersAsMultiBand", false)
+    //     }
+    //     if (Export_allConditLayersAsMultiBand){
+    //     afn_exportMultiBandImage(allMatchedLayersAsMultiBand.clip(defaultStudyArea)
+    //             ,  theversion + "-" + descKeywords + "-All-Cond-Layers"
+    //             , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-All-Cond-Layers"
+    //             , exportScale)
+    //     }
+    // }
+
+    if (RecordConfidenceAtEachTimeStep) {
+        // // Get the Probability layers and put them in their own image.
+        var theLayerMatchKey = ".*" + BULCconfidenceLabel + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        // print("theLayerMatchKey", theLayerMatchKey)
+
+        var allMatchedLayersAsMultiBand = theBoundIterate.select(theLayerMatchKey) //.clip(defaultStudyArea)
+        // print("allConfidenceLayersAsMultiBand", allMatchedLayersAsMultiBand)
+        var allConfidenceLayers = allMatchedLayersAsMultiBand
+        // if (Draw_allConfidenceLayersAsMultiBand){
+        //   Map.addLayer( allMatchedLayersAsMultiBand, {}, "allConfidenceLayersAsMultiBand", false)
+        // }
+        //   if (Export_allConfidenceLayersAsMultiBand){
+        // afn_exportMultiBandImage(allMatchedLayersAsMultiBand.clip(defaultStudyArea)
+        //         ,  theVersion + "-" + descKeywords+descKeywords + "-All-Confidence-Layers"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-All-Confidence-Layers"
+        //         , exportScale)
+        //}
+
+    }
+
+    if (RecordEventsAtEachTimeStep) {
+        // // Get the Event layers and put them in their own image.
+        var theLayerMatchKey = ".*" + EventLabel + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        // print("theLayerMatchKey", theLayerMatchKey)
+
+        var allMatchedLayersAsMultiBand = theBoundIterate.select(theLayerMatchKey) //.clip(defaultStudyArea)
+        // print("allEventLayersAsMultiBand", allMatchedLayersAsMultiBand)
+        var allEventLayers = allMatchedLayersAsMultiBand
+
+
+        // if (Draw_allEventLayersAsMultiBand){
+        // Map.addLayer( allMatchedLayersAsMultiBand, {}, "allEventLayersAsMultiBand", false)
+        // }
+        // if (Export_allEventLayersAsMultiBand){
+        // afn_exportMultiBandImage(allMatchedLayersAsMultiBand.clip(defaultStudyArea)
+        //         , theversion + "-" + descKeywords + "-All-Event-Layers"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theVersion + "-" + descKeywords + "-All-Event-Layers"
+        //         , exportScale)
+        // }
+
+    }
+
+    if (RecordBULCLayersAtEachTimeStep) {
+        // // Get the BULC layers and put them in their own image.
+        var theLayerMatchKey = ".*" + BULCLayerLabel + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        // print("theLayerMatchKey", theLayerMatchKey)
+
+        var allMatchedLayersAsMultiBand = theBoundIterate.select(theLayerMatchKey) //.clip(defaultStudyArea)
+        // print("allBULCLayersAsMultiBand", allMatchedLayersAsMultiBand)
+        var allBULCLayers = allMatchedLayersAsMultiBand
+        // var allBULCs = allMatchedLayersAsMultiBand // for possible reference later
+
+        // if (Draw_allBULCLayersAsMultiBand){
+        // Map.addLayer( allMatchedLayersAsMultiBand, {}, "allBULCLayersAsMultiBand", false)
+        // }
+        // if (Export_allBULCLayersAsMultiBand){
+        //   afn_exportMultiBandImage(allMatchedLayersAsMultiBand.clip(defaultStudyArea)
+        //         , theversion + "-" + descKeywords + "-All-BULC-Layers"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-All-BULC-Layers"
+        //         , exportScale)
+        // }
+        // if (Export_LastBULCLayerAsMultiBand){
+        //   var lastBULCnumber = allBULCs.bandNames().length().subtract(1)
+        //   print("lastBULCnumber", lastBULCnumber)
+        //   afn_exportMultiBandImage(allBULCs.select(lastBULCnumber).clip(defaultStudyArea)
+        //         ,  theversion + "-" + descKeywords + "-Final-BULC-Layer"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-Final-BULC-Layer"
+        //         , exportScale)
+        // }
+    }
+
+
+    if (RecordProbabilitiesAtEachTimeStep) {
+        // // Get the Probability layers and put them in their own image.
+        var theLayerMatchKey = ".*" + ProbsSelector + ".*" // since the one without the underscore is continually changed, and so the real values start at _1.
+        // print("theLayerMatchKey", theLayerMatchKey)
+
+        var allMatchedLayersAsMultiBand = theBoundIterate.select(theLayerMatchKey) //.clip(defaultStudyArea)
+        // print("allProbLayersAsMultiBand", allMatchedLayersAsMultiBand)
+        var allProbabilityLayers = allMatchedLayersAsMultiBand
+        // if (Draw_allProbLayersAsMultiBand){
+        // Map.addLayer( allMatchedLayersAsMultiBand, {}, "allProbLayersAsMultiBand", false)
+        // }
+        // // if (compareToPreviousValue){
+        // // for (var i = 5; i < 6; i++){
+        // //   Map.addLayer(ee.Image(afn_compareResults(allMatchedLayersAsMultiBand, aCheckLayer, i, defaultStudyArea)))
+        // // }
+        // // }
+
+        // if (Export_allProbLayersAsMultiBand){
+        // afn_exportMultiBandImage(allMatchedLayersAsMultiBand.clip(defaultStudyArea)
+        //         ,  theversion + "-" + descKeywords + "-All-Prob-Layers"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-All-Prob-Layers"
+        //         , exportScale)
+        //   }
+
+    }
+
+    if (RecordFinalClass) {
+        print("recording final class")
+        // grab that class as a component of the return
+        var finalBULCprobs = theBoundIterate.select(0).arrayFlatten([classNameList]).rename(classNameList) //.clip(defaultStudyArea)
+        // Here we will provide an export of the final probabilities. As a multi-band image.
+        // print("Creating task to export final probabilities")
+        // afn_exportMultiBandImage(theBoundIterate.select(0).arrayFlatten([classNameList]).rename(classNameList).clip(defaultStudyArea)
+        //         ,  theversion + "-" + descKeywords + "-FinalProbabilities"
+        //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-FinalProbabilities"
+        //         , exportScale)
+        print("recorded final probabilities")
+
+    }
+
+
+    // // Here we will provide an export of the comparison layer, for use in a future iteration if needed.
+    // afn_exportMultiBandImage(theBoundIterate.select(1).clip(defaultStudyArea)
+    //         ,  theversion + "-" + descKeywords + "-EndingComparisonLayer"
+    //         , 'users/alemlakes/' + outputAssetFolder+ '/' + theversion + "-" + descKeywords + "-EndingComparisonLayer"
+    //         , exportScale)
+
+
+
+    //     return {
+    //         maxvalue: max.arrayFlatten([
+    //             [BULCconfidenceLabel]
+    //         ])
+    //         , maxclass: maxindex.arrayFlatten([
+    //             [BULCLayerLabel]
+    //         ])
+    //     };
+
+    print('/////////////////////////////////////////////////////')
+    print('/////////////  Returning from BULC //////////////////')
+    print('/////////////////////////////////////////////////////')
+
+
+    //return(theBoundIterate)
+    return {
+        multiBandBULCReturn: theBoundIterate.clip(defaultStudyArea),
+        allConfidenceLayers: allConfidenceLayers.clip(defaultStudyArea),
+        allEventLayers: allEventLayers.selfMask().clip(defaultStudyArea),
+        allBULCLayers: allBULCLayers.selfMask().clip(defaultStudyArea),
+        allProbabilityLayers: allProbabilityLayers.clip(defaultStudyArea),
+        finalBULCprobs: finalBULCprobs.clip(defaultStudyArea),
+        defaultStudyArea: defaultStudyArea
+    }
+
+}
+
+exports.runBULCAlgorithm = runBULCAlgorithm

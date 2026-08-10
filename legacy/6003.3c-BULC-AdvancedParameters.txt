@@ -1,0 +1,226 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var TestPoints = /* color: #ffc82d */ee.Geometry.MultiPoint(
+        [[-119.194140625, 46.022691536571195],
+         [-113.217578125, 42.23967791837772],
+         [-105.834765625, 37.52168201584839],
+         [-96.869921875, 35.401337607125704],
+         [-85.09257812500002, 34.10154385632469],
+         [-122.41602084059724, 46.96173537592463]]),
+    aoi0 =
+    /* color: #98ff00 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-122.66579315510951, 47.273468102144946],
+          [-122.66579315510951, 46.862077796109354],
+          [-122.07940146970536, 46.862077796109354],
+          [-122.07940146970536, 47.273468102144946]]], null, false),
+    aoi1 =
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[-124.5115234375, 49.141973233624505],
+          [-124.5115234375, 41.75877252719287],
+          [-116.6013671875, 41.75877252719287],
+          [-116.6013671875, 49.141973233624505]]], null, false),
+    aoi2 =
+    /* color: #98ff00 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[-125.0388671875, 48.94032536898935],
+          [-125.0388671875, 32.04970776358625],
+          [-103.0662109375, 32.04970776358625],
+          [-103.0662109375, 48.94032536898935]]], null, false),
+    aoi3 =
+    /* color: #0b4a8b */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[-125.0388671875, 48.94032536898935],
+          [-125.0388671875, 25.030560889967514],
+          [-65.80058593750002, 25.030560889967514],
+          [-65.80058593750002, 48.94032536898935]]], null, false),
+    zoomBox =
+    /* color: #ffc82d */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-122.41770095799002, 46.963381496959144],
+          [-122.41770095799002, 46.96068691030248],
+          [-122.41383857700858, 46.96068691030248],
+          [-122.41383857700858, 46.963381496959144]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var version = "r2903-V2.4"
+print("6003.3c Advanced Parameters, Version ", version)
+var getBULCParameterDictionary = function() {
+    //////********************************************************************************************************************
+    var initializingLeveler = 0.7
+    var transitionLeveler = 0.7
+    var posteriorLeveler = 0.9
+    // might be good at this point to echo back the run's parameters.
+    var numberOfClassesInEvents = 10
+    var numberOfClassesToTrack = 3
+    var baseLandCoverImage = ee.Image(2) // default is "nothing has changed".
+    // put the initial comparison layer in front
+    //var firstComparisonImage = ee.Image.random().multiply(3).add(0.5).floor().byte() // let's start with a random.
+    var firstComparisonImage = baseLandCoverImage
+    //var firstComparisonImage = ee.Image(2) // for testing. When this is set to be live code, the crosstabs table will have a
+    // single strip of values in the 2nd (i=2 counting from 1) position.
+    // Using that logic, JC verified that the table is laid out so that the 'yesterday' aka 'comparison'
+    // image is arranged in the columns. That is, it's arranged in the usual bulc way.
+    // Map.addLayer(baseImage, {}, "random")
+    // print("number of images", eventsAsImageCollection.size())
+    //////////////////////////////////////////
+    //// What to record at each time step?   /////
+    //////////////////////////////////////////
+    var RecordIterationNumberAtEachTimeStep = false;
+    var RecordEventsAtEachTimeStep = false;
+    var RecordConditionalsAtEachTimeStep = false;
+    var RecordProbabilitiesAtEachTimeStep = false;
+    var RecordBULCLayersAtEachTimeStep = true;
+    var RecordConfidenceAtEachTimeStep = false;
+    var RecordFinalClass = true
+    var RecordFinalProbabilities = true
+    var verboseStack = false;
+    //////////////////////////////////////////
+    //// End of recording flags?   /////
+    //////////////////////////////////////////
+    var initializationApproach = "F" // meaning a first run, as opposed to a continuing run.
+    var overlayApproach = "C" // C = Custom matrix. D = IDentity matrix. V = oVerlay. The letter 'o' is not used to avoid confusion with zero
+    // print("Transition Method label: " , overlayApproach)
+    if (overlayApproach === "C") {
+        // var customTransitionMatrix = [
+        //     [1, 1, 1],
+        //     [0.1, 0.2, 0.3],
+        //     [0.4, 0.5, 0.6],
+        //     [0.7, 0.8, 0.9]
+        // ]
+        //     var customTransitionMatrix = [
+        //   //   [1, 1, 1],
+        // [0.41, 0.02, 0.02],
+        // [0.27, 0.05, 0.02],
+        // [0.14, 0.10, 0.02],
+        // [0.07, 0.16, 0.02],
+        // [0.03, 0.20, 0.01],
+        // [0.01, 0.20, 0.03],
+        // [0.02, 0.16, 0.07],
+        // [0.02, 0.10, 0.14],
+        // [0.02, 0.05, 0.27],
+        // [0.02, 0.02, 0.41]
+        //     ]
+        //     var customTransitionMatrix = [
+        //   //   [1, 1, 1],
+        // [0.20, 0.02, 0.02],
+        // [0.13, 0.05, 0.02],
+        // [0.07, 0.10, 0.02],
+        // [0.03, 0.16, 0.02],
+        // [0.02, 0.20, 0.02],
+        // [0.02, 0.20, 0.02],
+        // [0.02, 0.16, 0.03],
+        // [0.02, 0.07, 0.10],
+        // [0.02, 0.05, 0.13],
+        // [0.02, 0.02, 0.02]
+        //     ]
+        // change the above setting slightly, in the following way.
+        // add in some non-ignoring reaction to bin 10. Make it same as bin 8.
+        // and sum across the rows. reason was that the algorithm on the upper was producing
+        // numbers for the transition that were like 0.113, 0.114, 0.119. dampened in the extreme
+        // because of the math and the actual magnitude of the numbers. This below value scales them
+        // to sum to 1, across each row.
+        // illustrations and tests can be seen at:
+        // https://docs.google.com/spreadsheets/d/1BmlwxeZXg_S7WeOZWwMuDjIG-aAOJwwbOY7Py7B6sdE/edit#gid=703442467
+        // new, more standardized values  as of June 2024. The main effect is to make bin 10 more powerful.
+        // I feel I can do this because the cloud masks are better, so clouds are not errantly included as often.
+        // so bin 10 can be used as real data.
+        var customTransitionMatrix = [
+            [0.83, 0.08, 0.08],
+            [0.66, 0.24, 0.08],
+            [0.53, 0.37, 0.08],
+            [0.14, 0.76, 0.08],
+            [0.08, 0.83, 0.08],
+            [0.08, 0.83, 0.08],
+            [0.08, 0.76, 0.14],
+            [0.08, 0.37, 0.53],
+            [0.08, 0.24, 0.66],
+            [0.08, 0.08, 0.83]
+        ]
+        // this was the matrix up until June 4 2024, when I made more standardized values.
+        // var customTransitionMatrix = [
+        //     [0.83, 0.08, 0.08],
+        //     [0.66, 0.24, 0.1],
+        //     [0.46, 0.43, 0.11],
+        //     [0.14, 0.76, 0.1],
+        //     [0.08, 0.83, 0.08],
+        //     [0.08, 0.83, 0.08],
+        //     [0.1, 0.76, 0.14],
+        //     [0.11, 0.37, 0.53],
+        //     [0.1, 0.25, 0.65],
+        //     [0.11, 0.37, 0.53]
+        // ]
+    }
+    if (overlayApproach === "V") {
+        var numberOfStratifiedPointsForOverlay = 1000
+        var stratumImage = image1 // needed for stratification. Can have any band name
+    }
+    //////////////////////////////////////////
+    //// Prepare Parameter Dictionary BULC   /////
+    //////////////////////////////////////////
+    print("Packaging the BULC parameter dictionary")
+    var BULCargumentDictionary = {};
+    // BULCargumentDictionary.eventsAsImageCollection = eventsAsImageCollection
+    BULCargumentDictionary.initializingLeveler = initializingLeveler
+    BULCargumentDictionary.transitionLeveler = transitionLeveler
+    var transitionMinimum = (1 - transitionLeveler) / numberOfClassesToTrack;
+    // print("339493,transitionMinimum", transitionMinimum)
+    BULCargumentDictionary.transitionMinimum = transitionMinimum
+    BULCargumentDictionary.posteriorLeveler = posteriorLeveler
+    var posteriorMinimum = (1 - posteriorLeveler) / numberOfClassesToTrack;
+    // print("339493ww,posteriorMinimum", posteriorMinimum)
+    BULCargumentDictionary.posteriorMinimum = posteriorMinimum
+    BULCargumentDictionary.maxClassInEventImages = numberOfClassesInEvents
+    // print("kkkkk",BULCargumentDictionary.maxClassInEventImages)
+    BULCargumentDictionary.numberOfClassesToTrack = numberOfClassesToTrack
+    //BULCargumentDictionary.initializationApproach = initializationApproach
+    if (initializationApproach === "F") { // F meaning a first run image.
+        // in that case, we set a base land cover image
+        // and also set a first comparison image (which may be outdated but I'm leaving it in).
+        // BULCargumentDictionary.baseLandCoverImage = baseLandCoverImage
+        // BULCargumentDictionary.firstComparisonImage = firstComparisonImage
+    }
+    //BULCargumentDictionary.transitionCreationMethod = overlayApproach // watch for the parameter name change
+    if (overlayApproach === "V") {
+        // print ("in V")
+        BULCargumentDictionary.numberOfStratifiedPointsForOverlay = numberOfStratifiedPointsForOverlay
+        //BULCargumentDictionary.stratumImage = stratumImage
+    }
+    if (overlayApproach === "C") { // custom matrix of any shape
+        // print ("in C")
+        BULCargumentDictionary.customTransitionMatrix = customTransitionMatrix
+    }
+    BULCargumentDictionary.RecordIterationNumberAtEachTimeStep = RecordIterationNumberAtEachTimeStep
+    BULCargumentDictionary.RecordEventsAtEachTimeStep = RecordEventsAtEachTimeStep
+    BULCargumentDictionary.RecordProbabilitiesAtEachTimeStep = RecordProbabilitiesAtEachTimeStep
+    BULCargumentDictionary.RecordConditionalsAtEachTimeStep = RecordConditionalsAtEachTimeStep
+    BULCargumentDictionary.RecordBULCLayersAtEachTimeStep = RecordBULCLayersAtEachTimeStep
+    BULCargumentDictionary.RecordConfidenceAtEachTimeStep = RecordConfidenceAtEachTimeStep
+    BULCargumentDictionary.RecordFinalClass = RecordFinalClass
+    print("Parameters are now set in BULCargumentDictionary")
+    return ({
+        BULCargumentDictionary: BULCargumentDictionary,
+        initializationApproach: initializationApproach,
+        transitionCreationMethod: overlayApproach,
+        baseLandCoverImage: baseLandCoverImage, // needs to be in js dictionary, not ee dictionary, for some reason.
+        firstComparisonImage: firstComparisonImage, // needs to be in js dictionary, not ee dictionary, for some reason.
+        stratumImage: stratumImage // needs to be in js dictionary, not ee dictionary, for some reason.
+        // remove if not used
+        //SPECIALnumberOfClassesToTrack:numberOfClassesToTrack
+    })
+}
+exports.getBULCParameterDictionary = getBULCParameterDictionary;

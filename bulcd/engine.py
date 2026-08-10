@@ -183,18 +183,28 @@ def run_bulcd(config: BULCDConfig) -> bulc.BulcResult:
 
     update_factor_collection = organized.lof_zscore.map(_to_update_factors)
 
-    initial_prior = ee.Image.cat(
+    # CONFIRMED 2026-08-10 (6003.3c-BULC-AdvancedParameters real source):
+    # production's baseLandCoverImage = ee.Image(2), a hardcoded one-hot
+    # "unchanged" starting class (not derived from this AOI/run at all),
+    # leveled by initializing_leveler via the same dampen()-shaped formula
+    # as everything else. At the default initializing_leveler=0.0, dampen()
+    # collapses this to flat uniform regardless of which class is one-hot -
+    # identical to this rebuild's prior behavior, so this is backward
+    # compatible until a caller opts in.
+    one_hot_unchanged = ee.Image.cat(
         [
-            ee.Image.constant(1.0 / len(_DECISION_CLASS_NAMES)).rename(name)
+            ee.Image.constant(1.0 if name == "unchanged" else 0.0).rename(name)
             for name in _DECISION_CLASS_NAMES
         ]
     )
+    initial_prior = bulc.dampen(one_hot_unchanged, advanced.initializing_leveler)
 
     result = bulc.run_bulc(
         update_factor_collection,
         initial_prior,
         dampening_factor=advanced.dampening_factor,
         recency_factor=advanced.recency_factor,
+        posterior_leveler=advanced.posterior_leveler,
     )
 
     mask = study_area_mask(config)

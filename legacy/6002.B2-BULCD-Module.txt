@@ -1,0 +1,106 @@
+//
+var version = "r2903-V1"
+print("6002.B2-BULCD-Module, Version ", version)
+
+var binModule = require('users/alemlakes/CommonCode:502.8-Binning/502.8-Binning-5')
+var afn_whichBinInternal =  binModule.afn_whichBinInternal;
+var afn_getBinCuts =        binModule.afn_getBinCuts;
+var afn_getOneZBin =        binModule.afn_getOneZBin;
+// var afn_getZBinGivenMeanAndSDImagesDotMap3 = binModule.afn_getZBinGivenMeanAndSDImagesDotMap3;
+var BULCModule = require(
+    'users/alemlakes/r-2909-BULC-Releases:BULC/BULC-Module-Current/BULC-Minimal-Module-107'
+    );
+var ImageCompressionModule = require('users/alemlakes/CommonCode:502.imageCollectionCompressionAndExpansion/502.imageCollectionCompressionAndExpansion');
+// var afn_waterMask = require('users/alemlakes/CommonCode:/513.waterMask/513-waterMask').afn_waterMask;
+// var theWaterMask = afn_waterMask().not()
+
+function afn_BULCD(var_BULCD_args){
+  print("Arriving in BULC-D, the arguments are", var_BULCD_args)
+  var targetLOFAsZScore = var_BULCD_args.targetLOFAsZScore
+  var defaultStudyArea = var_BULCD_args.defaultStudyArea
+  var theTargetYear = var_BULCD_args.theTargetYear
+  var BULCargumentDictionaryPlus = var_BULCD_args.BULCargumentDictionaryPlus
+
+    // //=======================================================================================================
+    // /*
+    //           SECTION 3. BULC-D
+    // */
+    // //=======================================================================================================
+    ////////////////////////////////////////////////////////////////
+    // now we're ready to assign the bins for the assembled values.
+    ////////////////////////////////////////////////////////////////
+
+    // For binning
+    var binCuts = var_BULCD_args.binCuts;
+    // print("binCuts values:", binCuts)
+    var ConvertMultiBandImageToImageCollection = ImageCompressionModule.ConvertMultiBandImageToImageCollection
+    var collectBins = ee.ImageCollection(ConvertMultiBandImageToImageCollection(targetLOFAsZScore)).map(afn_getOneZBin(binCuts))
+    // print(collectBins, '4.collection bins');
+    Map.addLayer(collectBins, {}, "4.collection bins", false, 0)
+    Map.addLayer(targetLOFAsZScore, {}, "target lack of fit as z score", false, 0)
+
+    // what's the average bin value for each pixel?
+    var iBinAverage = collectBins.reduce(ee.Reducer.mean());
+    // Map.addLayer(iBinAverage, {min:4,max:8}, "4b.bin Average", false, 1)
+    // print(iBinAverage, '4b.bin Average');
+
+    //////////////////////////////////////////////////////////////////////
+    // Prepare for BULC run of these bins
+    //////////////////////////////////////////////////////////////////////
+
+    var runBULCAlgorithm = BULCModule.runBULCAlgorithm;
+
+
+    //////////////////////////////////////////////////////////////////////
+    // setting the eventsAsImageCollection to bins created dynamically
+
+    var eventsAsImageCollection = collectBins
+
+    // now, override any setting of eventsAsImageCollection with what I have assembled here.
+    BULCargumentDictionaryPlus.BULCargumentDictionary = ee.Dictionary(BULCargumentDictionaryPlus.BULCargumentDictionary).set("eventsAsImageCollection", eventsAsImageCollection)
+
+    // Also it's possible to, override any defaultStudyArea with what I have assembled here.
+    BULCargumentDictionaryPlus.BULCargumentDictionary = BULCargumentDictionaryPlus.BULCargumentDictionary.set("defaultStudyArea", defaultStudyArea)
+
+    //////////////////////////////////////////////////////////////////////
+    // end of setting the eventsAsImageCollection to bins created dynamically
+    //////////////////////////////////////////////////////////////////////
+
+    var fullBULCReturn = runBULCAlgorithm(BULCargumentDictionaryPlus)
+
+    // print(fullBULCReturn, "full BULC Return")
+    //////////////////////////////////////////
+    // Returns are:
+    //       multiBandBULCReturn : the large multi-band image of all of the following items:
+    //       allBULCLayers : a string of integer numbers representing the most likely pixel class through time.
+    //       allConfidenceLayers : a string of numbers 0-1 representing the probability of that most likely class at each time point.
+    //       allEventLayers : the Events used to drive BULC.
+    //       allProbabilityLayers : a multi-band image of all probabilities for all classes at all time slices.
+    //       finalBULC : an image of the final class for each pixel for the entire run.
+
+    //      Also, attached to the returned structure are properties. they are:
+    //  sampledStratifiedFeatures: the stratified random sample of points used to build the transition tables.
+    //  sampledStratifiedPointsAsArray: a 2D array of all those features as rows, and the Event values at those points as columns.
+    //  truthTableStack: a 3D array of transition table probabilities used for quantifying the evidence provided by each Event.
+    //////////////////////////////////////////
+
+    // View full result package
+    // Map.addLayer(ee.Image(fullBULCReturn.multiBandBULCReturn), {}, "3. MultiBand BULC Return package ", false, 0)
+    // print(ee.Image(fullBULCReturn.multiBandBULCReturn), "3. MultiBand set of returned values from BULC")
+
+    // Unpack the results.
+    var theFinalBULCprobs = ee.Image(fullBULCReturn.finalBULCprobs)//.clip(defaultStudyArea)
+            //.updateMask(theWaterMask) // water mask should only be done in post-processing.
+    // Map.addLayer(theFinalBULCprobs, {}, "4. Final BULC probs ", true, 0)
+    // print(ee.Image(theFinalBULCprobs), "10c. Final BULC probs")
+
+    return {
+      allBULCLayers: fullBULCReturn.allBULCLayers,
+      allConfidenceLayers: fullBULCReturn.allConfidenceLayers,
+      allEventLayers: fullBULCReturn.allEventLayers,
+      allProbabilityLayers: fullBULCReturn.allProbabilityLayers,
+      finalBULCprobs: theFinalBULCprobs,
+      multiBandBULCReturn: fullBULCReturn.multiBandBULCReturn
+    }
+}
+exports.afn_BULCD = afn_BULCD

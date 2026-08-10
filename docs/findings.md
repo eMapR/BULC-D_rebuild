@@ -677,3 +677,363 @@ not `cos`, at first order) but this is NOT yet confirmed by any live
 run - left unchanged rather than guessed. Test renamed/updated:
 `test_select_modality_regressors_unimodal_uses_full_first_order_harmonic`
 in `tests/test_inputs.py`; all 32 tests still pass.
+
+## BULC-Minimal-Module-107 obtained, `posterior_leveler` fix (2026-08-10)
+
+Direct follow-up to "Real production BULC-D parameters" above. User's
+plan (from "let's continue" earlier this session): run cell 8C through
+both the legacy GUI and this rebuild, compare outputs. First real
+comparison surfaced a stark discrepancy - the rebuild's render came back
+~95% "decrease" (red), the GUI's came back ~90% "unchanged" (green) with
+scattered noise - looking almost inverted, not just differently
+confident. User's own instinct ("they almost seem inverse") turned out
+to be the right thread to pull.
+
+**Diagnostic process, cheapest-explanation-first:**
+- Checked `engine.py`'s bin-to-matrix-row and matrix-column-to-class
+  ordering by hand and by direct trace (`_bin_zscore()`/
+  `_bin_to_update_factors()` at real points/dates) - both correct, not
+  an indexing bug.
+- Sampled real z-score medians at the cell centroid and two solid-red
+  points: all near-zero to slightly POSITIVE (0.06 to 0.52) - which per
+  the transition matrix should favor "unchanged," if anything leaning
+  "increase." Yet `final_probabilities` at every point was `decrease`
+  with extreme confidence (`0.9999999999999998` vs. `10^-16` to
+  `10^-112` for the other two classes) - a real contradiction between
+  input data and output, not a tuning issue.
+- User then fetched **`BULC-Minimal-Module-107`'s actual source**
+  (`alemlakes/r-2909-BULC-Releases`, `BULC-Module-Current/
+  BULC-Minimal-Module-107`) directly from the GEE Code Editor - saved to
+  `legacy/BULC-Minimal-Module-107.txt` (1267 lines).
+
+**The real source revealed a genuine missing mechanism, not a guess.**
+`afn_hiddenBULCIterateWithOptions` (the real per-Event loop) does TWO
+dampening operations per step, not one:
+```js
+// 1. Standard Bayes update - matches bulc.py's bayes_update() exactly
+posteriorProbsValidPixels1D = currentProbs.multiply(transitionArrayImageRescaledAndDampened)
+    .divide(currentProbs.arrayDotProduct(transitionArrayImageRescaledAndDampened))
+
+// 2. A SECOND dampening step, applied to the POSTERIOR, EVERY STEP:
+posteriorProbsValidPixels1D = afn_dayIRebalancingV3(posteriorProbsValidPixels1D, posteriorLeveler, posteriorMinimum)
+// afn_dayIRebalancingV3: probStackToLevel.multiply(balanceFactor).add(minimumProbToAddDaily)
+```
+`bulc.py` only ever implemented step 1 (matching production's separate
+`transitionLeveler`/`transitionMinimum` dampening of the transition
+table, which `dampening_factor` already modeled correctly). Step 2 -
+re-dampening the POSTERIOR after every single Bayes update - was never
+implemented at all. The numbers confirm both steps share one formula:
+`posteriorMinimum (0.0333...) = (1 - posteriorLeveler(0.9)) / 3`,
+`transitionMinimum (0.1) = (1 - transitionLeveler(0.7)) / 3` - exactly
+`dampen()`'s existing shape, `d*raw + (1-d)/n_classes`.
+
+**Mechanism, and why it explains the inversion:** without step 2,
+nothing bounds how extreme the running posterior can get across many
+sequential steps - small, even non-adversarial biases compound
+multiplicatively over ~350 steps (cell 8C's 2024-2025 evidence window)
+into runaway, uninterpretable confidence at the edge of float64
+precision. Production's `posteriorLeveler` continuously re-injects
+uniform mass at every single step, structurally preventing this. A
+diagnostic per-step trace (`_bin_zscore()`/`_bin_to_update_factors()` at
+real dates) confirmed individual steps compute correctly (mild z-scores
+→ bins 4/5 → `unchanged` favored 0.76-0.83, exactly as expected) -
+ruling out the per-step math and pointing squarely at the missing
+per-step regularization as the accumulation-level bug.
+
+**Fix implemented:**
+- `bulc.py`: `dampen()` generalized (renamed param `update_factors` ->
+  `image`, already fully generic) and reused for BOTH steps -
+  `run_bulc()` gained a new `posterior_leveler` parameter, applied via
+  `dampen(posterior, posterior_leveler)` immediately after
+  `bayes_update()`, before `discount()`.
+- `bulcd/config/schema.py`/`loader.py`: new `BULCAdvancedParams.posterior_leveler`
+  field, validated `0 < x <= 1` same as `dampening_factor`/`recency_factor`.
+  Defaults to `1.0` (no-op) - same rollout discipline as
+  `dampening_factor`'s own history (see
+  [decisions/0004](decisions/0004-dampening-factor-default-0.5.md)):
+  implement with a safe default first, validate empirically, THEN decide
+  a considered default via its own decision record. New: see
+  [decisions/0007](decisions/0007-posterior-leveler-regularization.md).
+- `bulcd/engine.py`: `run_bulcd()` passes `advanced.posterior_leveler`
+  through.
+- `configs/cell_8c_comparison.yaml`: updated with the REAL confirmed
+  values - `dampening_factor: 0.7` (= `transitionLeveler`),
+  `posterior_leveler: 0.9` (= `posteriorLeveler`).
+- 2 new tests (`test_posterior_leveler_defaults_to_off`,
+  `test_posterior_leveler_must_be_in_valid_range`); 34 total, all pass.
+
+**VALIDATED against real Earth Engine, same three points as the original
+inversion finding:** confidence is now bounded and sane -
+`{decrease: 0.914, unchanged: 0.043, increase: 0.043}` at the centroid
+(was `{decrease: 0.9999999999999998, unchanged: 1.3e-16, increase:
+4.2e-84}`) - a dramatic, confirmed fix for the runaway-confidence bug.
+
+**Not fully resolved - a real, separate gap remains.** The plurality
+classification at all three points is STILL `decrease`, not `unchanged`
+like the GUI's render. `afn_buildStartProbs`/`afn_createPriorsFromLandcoverMap`
+in the real source show production starts from a real `baseLandCoverImage`
+- one-hot encoded per pixel, then leveled by `initializingLeveler` (also
+confirmed 0.7) - NOT a flat uniform prior like this rebuild's
+`engine.run_bulcd()` currently constructs (`1/n_classes` per class,
+always). What `baseLandCoverImage` actually contains for a BULC-D run
+specifically isn't given in `BULC-Minimal-Module-107` itself - plausibly
+"assume unchanged" as the default starting hypothesis (which would
+explain the GUI's stronger unchanged-leaning result), but that's
+inference, not confirmed - would need `organizeBULCD_Inputs`'s source
+(still missing) or the BULC-D caller script to see how it's actually
+constructed. Flagged here, not yet investigated further - re-export to
+`projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_v2` in
+progress at time of writing to see the corrected map spatially before
+deciding next steps.
+
+## initializing_leveler, real organizeBULCD_Inputs source, z-score fixes (2026-08-10)
+
+Direct continuation, same session. User fetched two more real source
+files from the GEE Code Editor:
+
+**`afn_BULCD` (`6002.B2-BULCD-Module`, `r-2903-Dev`)** - turned out not
+to construct `baseLandCoverImage` itself; it just passes
+`BULCargumentDictionaryPlus` through to `runBULCAlgorithm`, only
+overriding `eventsAsImageCollection`/`defaultStudyArea`. This redirected
+the search to whatever supplies `BULCargumentDictionaryPlus` in the
+first place.
+
+**`6003.3c-BULC-AdvancedParameters` (`getBULCParameterDictionary()`,
+`r-2903-Dev`)** - the real source of `customTransitionMatrix` and all
+three levelers, confirmed. Critically:
+```js
+var baseLandCoverImage = ee.Image(2) // default is "nothing has changed".
+```
+A hardcoded constant - `getBULCParameterDictionary()` takes zero
+arguments, so this can't be per-AOI/per-run data. One-hot encoded to the
+"unchanged" class (2nd of `[1,2,3]`) and leveled by `initializingLeveler`
+(confirmed 0.7) via the same `dampen()`-shaped formula as everything
+else, giving a real starting prior of `[0.1, 0.8, 0.1]`
+(decrease/unchanged/increase) - not this rebuild's previous flat
+`[0.333, 0.333, 0.333]`.
+
+**Implemented**: `BULCAdvancedParams.initializing_leveler` (new field,
+`schema.py`/`loader.py`, validated `0 <= x <= 1` - inclusive of 0, unlike
+the other three levelers, since 0 is the meaningful "flat uniform, no
+informed prior" value here). `engine.run_bulcd()` now builds a one-hot
+"unchanged" image and runs it through `bulc.dampen()` instead of a flat
+`1/n_classes` constant. 2 more tests (36 total, all pass).
+
+**VALIDATED, and genuinely surprising:** rerunning the same three points
+with `initializing_leveler=0.7` produced numbers **identical to the
+decimal** to the flat-uniform-prior run. Reasoned through why: with
+`posterior_leveler=0.9` applied at *every* one of ~350 sequential steps,
+any single step's influence (including the very first prior) decays by
+roughly `0.9^N` - by step 350 that's `~6e-17`. The starting prior is
+completely washed out within the first few dozen steps for a sequence
+this long, so `initializing_leveler` genuinely cannot matter here. Real,
+confirmed, mathematically sound - not a bug - but it means the
+starting-prior theory does NOT explain the remaining "decrease" vs.
+"unchanged" disagreement with the GUI after all.
+
+**User then fetched a third file: `afn_organizeBULCD_Inputs`
+(`6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`, `r-2903-Dev`)** - the
+module CLAUDE.md has flagged as missing since this project's original
+scaffold, source of the entire expectation/target harmonic-fit and
+z-score layer. Confirms the legacy really is a discrete two-collection
+design (fit only on `expectationCollection`, scored only on
+`targetCollection`) - this rebuild's continuous full-stream scoring is a
+confirmed, deliberate divergence (see
+[decisions/0003](decisions/0003-continuous-evidence-replaces-expectation-target-split.md)),
+not something to reconcile. Two concrete formula corrections fell out of
+it:
+- **Z-score denominator**: `expectationPeriodSD.max(ZScoreDenominatorFactor)`
+  - a FLOOR/clamp, not the additive epsilon
+  (`residual_stddev + denominator_factor`) this used to implement. Also
+  confirmed: the result is clamped to `[-10, 10]` (low practical impact
+  given this project's `bin_cuts` already collapse anything beyond `±2`
+  into the outermost bin, but implemented for fidelity).
+- **`residual_stddev`**: plain `ee.Reducer.sampleStdDev()` (`n-1`
+  denominator) over per-image residuals, not this rebuild's regression
+  residual-standard-error convention (`n - num_regressors`). OLS
+  residuals sum to ~0 given the design always includes a constant term,
+  so the two formulas differ only in denominator.
+
+Both fixed in `bulcd/inputs.py` (`_zscore_image()`, `_fit_expectation_model()`).
+VALIDATED against real Earth Engine: `residual_stddev` at the cell 8C
+centroid came back `0.0503` - barely above the `0.05` floor, meaning the
+new formula gives roughly HALF the old denominator there
+(`max(0.05,0.0503)=0.0503` vs. the old `0.0503+0.05=0.1003`) - a real,
+meaningful change to z-score magnitude. **Rerunning the same three
+points again produced numbers unchanged to the decimal from the
+`initializing_leveler` test.** Same underlying reason: `posterior_leveler`'s
+per-step regularization dominates the long-run outcome; the bin
+*composition* over ~350 steps, not any single step's exact magnitude,
+drives the final classification.
+
+**Net conclusion after three confirmed, validated fixes: the remaining
+"decrease" vs. "unchanged" disagreement with the GUI is NOT explained by
+the posterior-overconfidence bug, the starting prior, or the z-score
+denominator formula - all three are now correct and none moved the
+classification.** `afn_organizeBULCD_Inputs` doesn't reference
+`dayStepSize` anywhere either - it lives inside a third, still-unfetched
+module (`afn_gatherCollectionsAndReduce`,
+`CommonCode2:515.ImageCollectionFilteringAndGathering/515-gatherCollections27b`).
+Given three tuning-level fixes all failed to move the needle, the more
+likely remaining explanation is something at the evidence-composition
+level (which images actually get included/weighted) rather than a
+fourth formula tweak - `dayStepSize`'s real role is the most concrete
+lead, but not yet confirmed.
+
+## dayStepSize confirmed and implemented - first fix that actually moved the needle (2026-08-10)
+
+Direct continuation, same session. User fetched `515-gatherCollections27b`
+(`CommonCode2:515.ImageCollectionFilteringAndGathering/515-gatherCollections27b`)
+- the real `afn_gatherCollectionsAndReduce`, source of `dayStepSize`.
+
+**`dayStepSize` is a temporal binning/aggregation window, not a
+sampling/thinning parameter:**
+```js
+var listOfMillis = ee.List.sequence(startDateMillis, endDateMillis, dayStepSizeMillis)
+function afn_nestedDay(binStartMillis) {
+    var start = ee.Date(binStartMillis)
+    var end = ee.Date(binStartMillis).advance(dayStepSize, 'day')
+    // ...gathers ALL images from ALL active sensors within [start, end)...
+    var dailyAnswer = multiSensorTimeSlice.median().rename([bandName_reduction])
+```
+Production divides the whole DOY/year range into `dayStepSize`-day bins,
+gathers every image from every enabled sensor landing in each bin,
+cloud-masks/reduces them individually (already correctly implemented on
+our side), then takes the MEDIAN across the entire bin - collapsing
+however many raw images fell in that window into exactly ONE combined
+"Event." That single combined image per bin, not each raw image, is what
+becomes one step in the sequential Bayesian fold.
+
+**This was a genuine, confirmed structural gap, not a missing formula
+tweak.** `bulcd/inputs.py`'s `assemble_evidence_collection()` previously
+treated every single cloud-free image as its own independent Event -
+~350 raw images for cell 8C's DOY 74-288 window, versus production's real
+`dayStepSize=3` producing roughly `(215/3)*2 ≈ 143` Events over the same
+data. Given how sensitive the classification already proved to be to the
+*number* of compounding sequential steps (that's exactly why
+`posterior_leveler` mattered so much), running more than twice as many
+updates as production over the same underlying evidence was a real,
+substantial difference - not a minor implementation detail.
+
+**Implemented**: new `_evidence_date_and_doy_bounds()` (union of all
+enabled sensors' resolved year/DOY ranges, matching production's
+`groupStartDOY`/`groupEndDOY`/`whichYears` - a combined window across
+sensors, not per-sensor) and `_bin_evidence_by_day_step()` in
+`bulcd/inputs.py`, wired into `assemble_evidence_collection()` after the
+existing per-sensor gather/merge/sort step. Empty bins reproduce
+production's "dummy image" safeguard (which prevents `.median()` from
+collapsing to a zero-band result) via a self-masked placeholder image
+unioned into every bin before reducing.
+
+**Implementation note, a real EE performance lesson:** the first version
+used `.map()` over the bin list with an independent `.filterDate()`
+inside each bin (each of ~140 bins re-scanning the full 352-image
+collection). This built a computation graph large enough to hit "User
+memory limit exceeded" even for a single-point `reduceRegion` query -
+worse than any prior full-cell operation in this project. Rewrote using
+`ee.Join.saveAll()` - the standard, efficient EE idiom for "group
+elements of one collection by date-range membership in another" - which
+resolved it completely; the rewritten version ran a full point-based
+`run_bulcd()` query in well under the earlier version's failure point.
+
+**VALIDATED against real Earth Engine, same three points as every prior
+check in this thread - and this is the FIRST of the four fixes in this
+whole investigation (posterior_leveler, initializing_leveler, z-score
+denominator, now dayStepSize) that actually moved the classification,**
+not just left it identical to the decimal:
+
+| Point | Before (per-image Events) | After (day_step_size-binned Events) |
+|---|---|---|
+| centroid | decrease 0.914 / unchanged 0.043 | decrease 0.820 / unchanged **0.127** |
+| red_pt_1 | decrease 0.911 / unchanged 0.045 | decrease 0.836 / unchanged **0.109** |
+| red_pt_2 | decrease 0.914 / unchanged 0.043 | decrease 0.904 / unchanged 0.052 |
+
+`unchanged` roughly tripled at two of the three points. Binned evidence
+count came back 123 (vs. 352 raw images before), same order of magnitude
+as the ~143 hand-estimated above. Still `decrease`-dominant everywhere -
+not a full flip to match the GUI's mostly-green render - but real,
+meaningful, confirmed movement, unlike the three earlier fixes that
+validated correctly but changed nothing. Whatever remains of the
+disagreement is now a smaller gap than before this fix, and the most
+promising remaining candidates are the still-open modality-resolution
+bug and `interpret.py`'s possibly-wrong `year_of_change()` definition
+(see below) rather than anything already covered by these four fixes.
+
+## Two more files: modality resolution is additive (not priority-based), and interpret.py's real design (2026-08-10)
+
+Same session, two more files fetched: `502.7-1h5-HarmonicFunctions`
+(`CommonCode2:/502.7-Harmonics/502.7-1h5-HarmonicFunctions`) and
+`6002.C2-BULCD-Module-analyzeOutputs` (the real `afn_interpretBULCDResult`,
+`r-2902-Dev` - a different repo than the `r-2903-Dev` files fetched
+earlier). **Not yet implemented** - findings recorded here, fixes queued
+as a follow-up batch per user's explicit sequencing choice (dayStepSize
+first, these after).
+
+**Modality-priority resolution: our "richest shape wins" assumption was
+wrong.** Real `afn_determineHarmonicIndependentsViaModalityDictionary`:
+```js
+if (vm.constant) { var harmonicList = ee.List(['constant']) }
+if (vm.linear) { harmonicList = harmonicList.add('t') }
+if (vm.unimodal) { harmonicList = harmonicList.add('cos').add('sin') }
+if (vm.bimodal) { harmonicList = harmonicList.add('cos2').add('sin2') }
+if (vm.trimodal) { harmonicList = harmonicList.add('cos3').add('sin3') }
+```
+This is ADDITIVE - every true flag's terms concatenate onto the list, not
+"pick the richest one." `bulcd/inputs.py`'s `_select_modality_regressors()`
+currently picks exactly one branch and returns early
+(trimodal > bimodal > unimodal > linear > constant). For cell 8C
+specifically (only `unimodal` relevant, and our unimodal branch already
+hardcodes `"constant"` regardless of the flag's own value) this produces
+the same result either way - didn't affect any of this session's cell 8C
+numbers - but it's a confirmed, real bug for any config with multiple
+simultaneous flags. Also confirms `constant` must be `true` for this
+function to even run without erroring (`harmonicList` is only
+initialized inside `if (vm.constant)`), matching the real
+`BULCargumentDictionaryPlus` Console dump from earlier in this session
+(`constant: true, unimodal: true` together) -
+`configs/cell_8c_comparison.yaml` currently has `constant: false`, a
+transcription error on the assistant's part, queued to fix alongside the
+additive-resolution rewrite.
+
+**R2 formula, also confirmed and different from ours.** Real
+`afn_getRMSEandR2`:
+```js
+var dof = n.subtract(Independents.length())
+var rss = rmsr.pow(2).multiply(n)          // rmsr = regression reducer's own RMS-residual output
+var sSquared = rss.divide(dof)
+var yVariance = imageCollection.select(dependent).reduce(ee.Reducer.sampleVariance())
+var rSquareAdj = ee.Image(1).subtract(sSquared.divide(yVariance))
+```
+Production computes ADJUSTED R2 (dof-corrected residual variance over
+sample variance of y), not this rebuild's plain `1 - SS_res/SS_tot`. R2
+is diagnostic-only (doesn't feed the Bayesian engine itself), so lower
+priority than the z-score fixes already made, but a real, now-fixable
+discrepancy.
+
+**`interpret.py`'s `year_of_change()` may have the wrong definition
+entirely.** Real `afn_interpretBULCDResult`'s timing logic:
+```js
+var highChangeProb = prob1.gt(timingThreshold)          // per-timestep boolean, prob1 = decrease band
+var changeIndices = highChangeProb.multiply(indicesIm)  // step index where crossed, else 0
+// ...MAX-fill zeros, then reduce(min) = the FIRST index that ever crossed...
+var firstChange = changeIndices.reduce(ee.Reducer.min())
+```
+Production's real "when did it change" is simply the FIRST timestep
+where probability ever crossed a threshold - no requirement that the
+classification stay flipped through to the present. This rebuild's
+`year_of_change()` requires an UNBROKEN RUN reaching the last Event - a
+meaningfully stricter, different definition, and a very plausible actual
+explanation for the previously-documented 12-year detection lag finding
+(see "Year of change" above) - production doesn't wait for sustained
+reclassification, it just asks "did the probability ever cross a line."
+There's also a separate, simpler `wasItEver`/`howOftenWasIt` mechanism
+(did probability ever cross a threshold anywhere in the stack, with NO
+run-length requirement at all) that directly covers the "changed, then
+recovered" case `interpret.py`'s own docstring flags as explicitly
+unhandled. Also notable: production cross-checks the Bayesian
+probability threshold against the RAW index means themselves
+(`expectationPeriodSummaryValue`/`targetPeriodSummaryValue` thresholds,
+part of the still-missing `BULCD-AnalysisParameters-v5`) before calling
+something a confirmed "large drop" - a real design pattern (don't trust
+the probability alone) this rebuild doesn't currently have an equivalent
+of.

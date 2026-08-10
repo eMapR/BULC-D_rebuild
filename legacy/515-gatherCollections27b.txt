@@ -1,0 +1,1554 @@
+// if (verbose) {
+var theVersion = "56d4";
+print("using r-CommonCode2-515-gatherCollections27, Version: ", theVersion);
+// ==============================================================================
+// Script: 515-gatherCollections27b
+// Description: A high-level image collection aggregator. It natively queries
+//              Earth Engine catalogs (Optical/SAR/Thermal), applies cloud
+//              masks, calculates specific indices (NDVI/NBR/VH), and filters
+//              by the study geometry and date ranges.
+// ==============================================================================
+ // }
+ // //=======================================================================================================
+ // /*
+ //             Description (from Gemini V1.5, on May 13 2024 on version 26.9.
+ // */
+ // //=======================================================================================================
+ /**
+  * 1. Cloud Masking and Scaling Functions:
+  *
+  *   - The code defins a series of functions for cloud masking and applying scale factors to
+  *     different satellite imagery datasets:
+  *       - `maskLowQA`:  Masks pixels in Sentinel-2 imagery based on Cloud Score Plus QA values
+  *         (for images from 2021 onwards).
+  *       - `maskSrCloudsL8andL9`: Masks clouds and saturation in Landsat 8 and 9 imagery using QA bands.
+  *       - `afn_cloudMaskIC_L5andL7`: Masks clouds and shadows in Landsat 5 and 7 imagery using QA bands.
+  *       - `afn_cloudMaskIC_MO`: Placeholder for potential cloud masking in MODIS imagery
+  *         (currently does nothing).
+  *       - `afn_cloudMaskIC_olderS2`: Masks clouds, cirrus, and water in Sentinel-2 imagery
+  *         (for images before 2019) using QA bands.
+  *       - `applyScaleFactorsL789`: Applies scale factors to Landsat 7, 8 and 9 surface reflectance
+  *         and thermal bands.
+  *       - `applyScaleFactorsS2`: Applies scale factors to Sentinel-2 bands.
+  *
+  * 2. `afn_gatherCollectionsAndReduce` Function:
+  *
+  *   - This is the core function that gathers image collections from various sensors, filters them,
+  *     applies cloud masking, performs data reduction, and merges the results.
+  *   - Arguments (`gatherCollections_args`):
+  *      - `datasetSelection`: A dictionary specifying which sensors to include (L5, L7, L8, L9, MO, S1, S2, DW).
+  *      - `defaultStudyArea`:  The geographic region of interest.
+  *      - `dayStepSize`: The time interval (in days) between image acquisitions.
+  *      - Individual sensor dictionaries (e.g., `L5dictionary`, `S2dictionary`) containing
+  *        sensor-specific parameters like years, date ranges, and cloud cover thresholds.
+  *      - `bandName_reduction`: The name of the band to use for reduction.
+  *      - `whichReduction`: The type of reduction to apply (e.g., "NBR", "NDVI", "count", "mode").
+  *      - `verbose`: A flag to control the amount of output printed.
+  *
+  *   - Key Steps:
+  *       - Sensor Selection:  The code determines which sensors are activated in `datasetSelection`
+  *         and initializes corresponding variables.
+  *       - Date Range Determination: It finds the earliest start date, latest end date, and the
+  *         full set of years to process based on the selected sensors' parameters.
+  *       - Nested Functions for Data Reduction:  It defines nested functions for calculating NBR,
+  *         NDVI, SWIR1, SWIR2, and other values for different sensors (L5, L7, L8, L9, MO, S1, S2).
+  *       - Iterating Through Years and Days: The code iterates through the selected years and
+  *         creates an image collection with one image per `dayStepSize` interval.
+  *       - Filtering and Processing: For each day, it filters the image collections based on
+  *         date, cloud cover, and applies the appropriate cloud masking and scaling functions.
+  *       - Data Reduction: It applies the specified reduction method (`whichReduction`) to the
+  *         filtered image collections for each day (e.g., calculating the median NBR, counting images,
+  *         or determining the mode of a classification).
+  *       - Merging Results: It merges the results from all selected sensors into a single image
+  *         collection.
+  *
+  * 3. Testing Sections:
+  *
+  *   - The code includes two testing sections (`testing1` and `testing2`) that demonstrate how to
+  *     use `afn_gatherCollectionsAndReduce` with different sensor configurations and reduction methods.
+  *
+  */
+ // //=======================================================================================================
+ // /*
+ //             End of Description (from Gemini V1.5, on May 13 2024
+ // */
+ // //=======================================================================================================
+// Oct 2024, cloudscore now used for 2015+; they updated their holdings so we updated the code
+ // Nov 10 2023, implemented cloudscore plus for S2.
+ //  Its use can be seen in the test section at the bottom.
+ //  Note there is a thumbnail that gets drawn, so you can see the individual image in the collection
+ //  after the score screening is applied.
+ // At the time of this writing, it has only been run on image from 2021 onwards. It is being run on earlier images
+ // so we should update the line "If year >= 2021" once that has progressed.
+ // Saved this version at 9:19 on Nov 10 2023. Can be compared with the version of October 7 2023 to see what was added.
+ // Dec 27 2023. Added Structure for processing S1 images. Upped the version to 26.5.
+ // //=======================================================================================================
+ // /*
+ //             Requires
+ // */
+ // //=======================================================================================================
+ var afn_cloudMasking = require('users/alemlakes/CommonCode:/512.Clouds/512.BULC-D CloudMasking');
+ // I believe the link below is not used, since a func with this name is defined in the spot. I think this is leftover from trying it.
+ // I'm working on something else right now, so I won't delete this. but will comment it out and see if it is a problem. To delete in Say sept 2023.
+ // var afn_CloudMasked_NestedScope = require('users/alemlakes/r-2904-Dev:BULCD-Sandbox/512.BULC-D CloudMasking').afn_CloudMasked_NestedScope;
+ // var afn_addHarmonicIndependentsUsingPropertyNameToIC = require('users/alemlakes/CommonCode:/502.7-Harmonics/502.7-1g HarmonicFunctions (for BULC-D)').afn_addHarmonicIndependentsUsingPropertyNameToIC; // now called from elsewhere
+var afn_bubbleSort = require('users/alemlakes/CommonCode:/500.JSFunctions/500a.JSTextFunctions').afn_bubbleSort
+var afn_mergeStringArrays = require('users/alemlakes/CommonCode:/500.JSFunctions/500a.JSTextFunctions').afn_mergeStringArrays
+var afn_DOYToMonth = require('users/alemlakes/CommonCode:/500.JSFunctions/500b.JSDateFunctions').afn_DOYToMonth
+var afn_DOYToDay = require('users/alemlakes/CommonCode:/500.JSFunctions/500b.JSDateFunctions').afn_DOYToDay
+ /******************************************************************************************************************/
+ /******************************************************************************************************************/
+ /************************************************/
+ /**** FUNCTION FOR CLOUD MASK with QA bands *****/
+ /************************************************/
+ // Function to mask pixels with low CS+ QA scores.
+ function maskLowQA(image) {
+     var qaBand = 'cs';
+     var clearThreshold = 0.60;
+     var mask = image.select(qaBand).gte(clearThreshold);
+     return image.updateMask(mask);
+ }
+ // Define the cloud mask function. From checkpoint F43a in the book.
+ function maskSrCloudsL8andL9(image) {
+     // Bit 0 - Fill
+     // Bit 1 - Dilated Cloud
+     // Bit 2 - Cirrus
+     // Bit 3 - Cloud
+     // Bit 4 - Cloud Shadow
+     var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111',
+         2)).eq(0);
+     var saturationMask = image.select('QA_RADSAT').eq(0);
+     return image.updateMask(qaMask)
+         .updateMask(saturationMask);
+ }
+ function afn_cloudMaskIC_L5andL7(inputImage) {
+     var QA_Band_Name_Input = 'QA_PIXEL';
+     //LANDSAT cloud masking function, embedded so that the QA can be set
+     // within this scope, and not need to be a global variable.
+     function afn_CloudMasked_NestedScope(inputImage) {
+         inputImage = ee.Image(inputImage)
+         var cloudShadowBitMask = 1 << 3
+         var cloudsBitMask = 1 << 4
+         // Get the pixel QA band.
+         var qa = inputImage.select(QA_Band_Name_Input)
+         // Both flags should be set to zero, indicating clear conditions.
+         var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+             .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+         // Return the masked image, scaled to TOA reflectance, without the QA bands.
+         return inputImage.updateMask(mask)
+             .copyProperties(inputImage, ["system:time_start"])
+     }
+     var imageToReturn = afn_CloudMasked_NestedScope(inputImage)
+     return (imageToReturn)
+ }
+ function afn_cloudMaskIC_MO(inputImage) {
+     var imageToReturn = inputImage
+     return (imageToReturn)
+ }
+ function afn_cloudMaskIC_olderS2(inputImage) {
+     function afn_CloudMasked_NestedScope(inputImage, params) {
+         inputImage = ee.Image(inputImage)
+         var Cloud_BQA = inputImage.select(params.QA_Band_Name_Input);
+         var Cloud_Mask =
+             Cloud_BQA.bitwiseAnd(params.cloudBit).eq(
+                 params.clouds_bit_Thresh).and( // no clouds
+                 Cloud_BQA.bitwiseAnd(params.cirrusBit).eq(
+                     params.cirrus_bit_Thresh)).and( // no cirrus
+                 Cloud_BQA.bitwiseAnd(params.waterBit).eq(
+                     params.water_bit_Thresh)); // no water
+         return inputImage.updateMask(Cloud_Mask);
+     }
+     var params = {
+         QA_Band_Name_Input: 'QA60',
+         cloudBit: Math.pow(2, 10),
+         cirrusBit: Math.pow(2, 11),
+         waterBit: Math.pow(2, 11),
+         clouds_bit_Thresh: 0,
+         cirrus_bit_Thresh: 0,
+         water_bit_Thresh: 0
+     }
+     var imageToReturn = afn_CloudMasked_NestedScope(inputImage, params)
+     return (imageToReturn)
+ }
+ //////////////////////////////////////////////////////////////////////
+ //////////////////////////////////////////////////////////////////////
+ /**** scaling functions ************/
+ function applyScaleFactorsL789(image) {
+     var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+     var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+     return image.addBands(opticalBands, null, true)
+         .addBands(thermalBands, null, true);
+ }
+ function applyScaleFactorsS2(image) {
+     return image.addBands(image.select('B.').multiply(0.0001));
+ }
+ //*********************************************************************************
+ //*********************************************************************************
+ //*********************************************************************************
+ //*********************************************************************************
+ /************************************************/
+ /**** check whether SAR and/or Optical are active
+ (probably as selected in the BULC-D interface). *****/
+ /************************************************/
+ function afn_checkForSAR(collectingParams) {
+     var theSARAnswer = false;
+     if (collectingParams.datasetSelection.S1 === true)
+         theSARAnswer = true;
+     if (collectingParams.datasetSelection.AL === true)
+         theSARAnswer = true;
+     if (collectingParams.datasetSelection.NI === true)
+         theSARAnswer = true;
+     // print("theSARAnswer", theSARAnswer)
+     return (theSARAnswer)
+ }
+ exports.afn_checkForSAR = afn_checkForSAR;
+ function afn_checkForOptical(collectingParams) {
+     var theOpticalAnswer = false;
+     // print("theOpticalAnswer", theOpticalAnswer)
+    if (collectingParams.datasetSelection.L5 === true)
+        theOpticalAnswer = true;
+     if (collectingParams.datasetSelection.L7 === true)
+         theOpticalAnswer = true;
+     if (collectingParams.datasetSelection.L8 === true)
+         theOpticalAnswer = true;
+     if (collectingParams.datasetSelection.L9 === true)
+         theOpticalAnswer = true;
+     if (collectingParams.datasetSelection.MO === true)
+         theOpticalAnswer = true;
+     if (collectingParams.datasetSelection.S2 === true)
+         theOpticalAnswer = true;
+     return (theOpticalAnswer)
+ }
+ exports.afn_checkForOptical = afn_checkForOptical
+ function afn_gatherCollectionsAndReduce(gatherCollections_args) {
+     var verbose = gatherCollections_args.verbose
+     if (verbose) {
+         print("VERBOSE!")
+         print("Arguments inside afn_gatherCollectionsAndReduce", gatherCollections_args)
+     }
+     /********************************************************************/
+     /************              NBR functions                *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_NBR_L5(singleImageToday) {
+             var NIR_Input = 'SR_B4';
+             var SWIR2_Input = 'SR_B7';
+             var mySingleValue = singleImageToday.normalizedDifference([NIR_Input, SWIR2_Input])
+             // var mySingleValue = afn_extractNBR(afn_addNBR_L5(
+             //     singleImageToday))
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NBR_L7(singleImageToday) {
+             var NIR_Input = 'SR_B4';
+             var SWIR2_Input = 'SR_B7';
+             var mySingleValue = singleImageToday.normalizedDifference([NIR_Input, SWIR2_Input])
+             // var mySingleValue = afn_extractNBR(afn_addNBR_L7(
+             //     singleImageToday))
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NBR_L8andL9(singleImageToday) {
+             var NIR_Input = 'SR_B5';
+             var SWIR2_Input = 'SR_B7';
+             var mySingleValue = singleImageToday.normalizedDifference([NIR_Input, SWIR2_Input])
+             // var mySingleValue = afn_extractNBR(afn_addNBR_L8andL9(
+             //     singleImageToday))
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NBR_MO(singleImageToday) {
+             var NIR_Input = 'Nadir_Reflectance_Band2';
+             var SWIR2_Input = 'Nadir_Reflectance_Band7';
+             var mySingleValue = singleImageToday.normalizedDifference([NIR_Input, SWIR2_Input])
+             // var mySingleValue = afn_extractNBR(afn_addNBR_MO(
+             //     singleImageToday))
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NBR_S2(singleImageToday) {
+             var NIR_Input = 'B8';
+             var SWIR2_Input = 'B12';
+             var mySingleValue = singleImageToday.normalizedDifference([NIR_Input, SWIR2_Input])
+             // var mySingleValue = afn_extractNBR(afn_addNBR_S2(
+             //     singleImageToday))
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+     }
+     /********************************************************************/
+     /************              NDVI functions                *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_NDVI_L5(singleImageToday) {
+             var nirBand = 'SR_B4';
+             var redBand = 'SR_B3';
+             var mySingleValue = singleImageToday.normalizedDifference([nirBand, redBand]);
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NDVI_L7(singleImageToday) {
+             var nirBand = 'SR_B4';
+             var redBand = 'SR_B3';
+             var mySingleValue = singleImageToday.normalizedDifference([nirBand, redBand]);
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NDVI_L8andL9(singleImageToday) {
+             var nirBand = 'SR_B5';
+             var redBand = 'SR_B4';
+             var mySingleValue = singleImageToday.normalizedDifference([nirBand, redBand]);
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NDVI_MO(singleImageToday) {
+             var nirBand = 'Nadir_Reflectance_Band2';
+             var redBand = 'Nadir_Reflectance_Band1';
+             var mySingleValue = singleImageToday.normalizedDifference([nirBand, redBand]);
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_NDVI_S2(singleImageToday) {
+             var nirBand = 'B8';
+             var redBand = 'B4';
+             var mySingleValue = singleImageToday.normalizedDifference([nirBand, redBand]);
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+     }
+     /********************************************************************/
+     /************              AL  functions                *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_HH_S1(singleImageToday) {
+             print("in afn_getGermaneValue_HH_S1")
+             var whichBand = 'HH';
+             var mySingleValue = singleImageToday.select([whichBand])
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_RFDI_AL(singleImageToday) {
+             print("in afn_getGermaneValue_RFDI_AL")
+             var dBHH = (ee.Image((singleImageToday.select('HH').pow(2)).log10()).multiply(10).subtract(83)).rename('dBHH')
+             var dBHV = (ee.Image((singleImageToday.select('HV').pow(2)).log10()).multiply(10).subtract(83)).rename('dBHV')
+             var dbToPower = ee.Image(10).pow(ee.Image(dBHH.addBands([dBHV])).divide(10)).rename(['HH', 'HV'])
+             var mySingleValue = dbToPower.normalizedDifference(['HH', 'HV']).rename('RFDI')
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+     }
+     /********************************************************************/
+     /************              S1  functions                *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_HH_S1(singleImageToday) {
+             print("in afn_getGermaneValue_HH_S1")
+             var whichBand = 'HH';
+             var mySingleValue = singleImageToday.select([whichBand])
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_HV_S1(singleImageToday) {
+             var whichBand = 'HV';
+             var mySingleValue = singleImageToday.select([whichBand])
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_VH_S1(singleImageToday) {
+             var whichBand = 'VH';
+             var mySingleValue = singleImageToday.select([whichBand])
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+         function afn_getGermaneValue_VV_S1(singleImageToday) {
+             var whichBand = 'VV';
+             var mySingleValue = singleImageToday.select([whichBand])
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             return (ee.Image(mySingleValue).toFloat())
+         }
+     }
+     /********************************************************************/
+     /************              SWIR1 AND SWIR2 functions    *************/
+     /********************************************************************/
+     /********************************************************************/
+     /************              SWIR1 functions              *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_SWIR1_Landsat5and7(singleImageToday) {
+             singleImageToday = ee.Image(singleImageToday)
+             var SWIR1_Input = 'SR_B5';
+             // print(SWIR1_Input)
+             var mySingleValue = singleImageToday.select(SWIR1_Input).rename(bandName_reduction)
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             mySingleValue = ee.Image(mySingleValue).toFloat()
+             return (mySingleValue)
+         }
+         function afn_getGermaneValue_SWIR1_Landsat8and9(singleImageToday) {
+             singleImageToday = ee.Image(singleImageToday)
+             var SWIR1_Input = 'SR_B6';
+             // print(SWIR1_Input)
+             var mySingleValue = singleImageToday.select(SWIR1_Input).rename(bandName_reduction)
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             mySingleValue = ee.Image(mySingleValue).toFloat()
+             return (mySingleValue)
+         }
+         function afn_getGermaneValue_SWIR1_MO(singleImageToday) {
+             var SWIR1_Input = 'Nadir_Reflectance_Band6';
+             var mySingleValue = singleImageToday.select(SWIR1_Input).rename(bandName_reduction)
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             mySingleValue = ee.Image(mySingleValue).toFloat()
+             return (mySingleValue)
+         }
+         function afn_getGermaneValue_SWIR1_S2(singleImageToday) {
+             var SWIR1_Input = 'B11';
+             var mySingleValue = singleImageToday.select(SWIR1_Input).rename(bandName_reduction)
+             mySingleValue = ee.Image(mySingleValue).divide(1e4).toFloat()
+             return (mySingleValue)
+         }
+     }
+     /********************************************************************/
+     /************              SWIR2 functions               *************/
+     /********************************************************************/
+     {
+         function afn_getGermaneValue_SWIR2_Landsat(singleImageToday) {
+             singleImageToday = ee.Image(singleImageToday)
+             var SWIR2_Input = 'SR_B7';
+             // print(SWIR2_Input)
+             var mySingleValue = singleImageToday.select(SWIR2_Input).rename(bandName_reduction)
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             mySingleValue = ee.Image(mySingleValue).toFloat()
+             return (mySingleValue)
+         }
+         function afn_getGermaneValue_SWIR2_MO(singleImageToday) {
+             var SWIR2_Input = 'Nadir_Reflectance_Band7';
+             var mySingleValue = singleImageToday.select(SWIR2_Input).rename(bandName_reduction)
+             mySingleValue = mySingleValue.copyProperties(singleImageToday);
+             mySingleValue = ee.Image(mySingleValue).toFloat()
+             return (mySingleValue)
+         }
+         function afn_getGermaneValue_SWIR2_S2(singleImageToday) {
+             var SWIR2_Input = 'B12';
+             var mySingleValue = singleImageToday.select(SWIR2_Input).rename(bandName_reduction)
+             mySingleValue = ee.Image(mySingleValue).divide(1e4).toFloat()
+             return (mySingleValue)
+         }
+     }
+     //  // removed some outdated functions of mine, Dec 27 2023 8:20am. See earlier versions to reconstruct, if ever needed.
+     /////////////////////////////////////////////////////////////////////////////////////////
+     //          Gather data for all requested sensors
+     /////////////////////////////////////////////////////////////////////////////////////////
+     function afn_getGermaneValuesForAGivenPeriod_allSensors(getGermaneValuesParameters) {
+         var whichYears = getGermaneValuesParameters.whichYears;
+         var groupStartDOY = getGermaneValuesParameters.groupStartDOY;
+         var groupEndDOY = getGermaneValuesParameters.groupEndDOY;
+         var dayStepSize = getGermaneValuesParameters.dayStepSize;
+         var defaultStudyArea = getGermaneValuesParameters.defaultStudyArea;
+         var whichReduction = getGermaneValuesParameters.whichReduction;
+         var bandName_reduction = getGermaneValuesParameters.bandName_reduction;
+         var dayStepSize = getGermaneValuesParameters.dayStepSize;
+         var SensorInputL8 = 'LANDSAT/LC08/C02/T1_L2'; // hack bc we need a strange initialization, and this works
+         var SensorInputDW = 'GOOGLE/DYNAMICWORLD/V1' // same hack
+         var SensorInputS1 = 'COPERNICUS/S1_GRD' // same hack
+         print("Gathering data for all sensors listed 'true'", datasetSelection)
+         print("Using the gathering parameters", getGermaneValuesParameters)
+         // set isOptical and isRadar for use in stepping through the code
+         var isOptical = false
+         var isRadar = false
+         if (datasetSelection.S1 || datasetSelection.AL) {
+             isRadar = true
+         }
+         if (datasetSelection.DW || datasetSelection.L5 || datasetSelection.L7 || datasetSelection.L8 || datasetSelection.L9 || datasetSelection.MO || datasetSelection.S2) {
+             isOptical = true
+         }
+         // if(verbose){
+         print("isRadar", isRadar)
+         print("isOptical", isOptical)
+         // }
+         if (verbose) {
+             print("in Germane values", getGermaneValuesParameters)
+             // the returned IC spans multiple years if multiple years are sent in. The years are not combined in this function.
+         }
+         if (isRadar) {
+             if (datasetSelection.AL) {
+                 print("3232.tracking AL!")
+                 var SARToTrack = ALdictionary.SARValueToTrack; // You may need to define this in the dictionary or elsewhere
+                 print("AL SARToTrack", SARToTrack)
+                 if (SARToTrack == "RFDI") {
+                     print("Reducing using RFDI")
+                     var theSARCollection = ee.ImageCollection(SensorInputAL)
+                     var thePolarizedSARCollection = theSARCollection
+                     var thePolarizedSARCollectionHere = thePolarizedSARCollection.filterBounds(defaultStudyArea)
+                         .filter(ee.Filter.eq('Polarizations', ["HH", "HV"]))
+                     var dummyIC = ee.ImageCollection(thePolarizedSARCollection.first())
+                         .map(afn_getGermaneValue_RFDI_AL)
+                 }
+                 ////************ end inserted
+             }
+             if (datasetSelection.NI) {
+                 print("3233.tracking NISAR!")
+             }
+             if (datasetSelection.S1) {
+                 print("3234.tracking S1!")
+                 var SARToTrack = S1dictionary.SARValueToTrack
+                 print("S1 SARToTrack", SARToTrack)
+                 if (SARToTrack === "HH") {
+                     print("Reducing using HH")
+                     var theSARCollection = ee.ImageCollection(SensorInputS1)
+                     var thePolarizedSARCollection = theSARCollection
+                         .filter(ee.Filter.listContains('transmitterReceiverPolarisation', SARToTrack))
+                     var thePolarizedSARCollectionHere = thePolarizedSARCollection.filterBounds(defaultStudyArea)
+                     var dummyIC = ee.ImageCollection(thePolarizedSARCollection.first())
+                         .map(afn_getGermaneValue_HH_S1)
+                     // for a complex reason, this is for if there is no matching image for a given day, this has the right structure needed for merging.
+                     if (verbose) {
+                         // Map.addLayer(theSARCollection,{},"Unreduced IC across all times") // non-homogeneous collection, cannot be drawn.
+                         print("Unreduced Polarized IC", thePolarizedSARCollection)
+                         Map.addLayer(thePolarizedSARCollection, {}, "Unreduced Polarized IC")
+                         Map.addLayer(thePolarizedSARCollectionHere, {}, "Unreduced Polarized IC here across all times")
+                         print(SARToTrack + " dummy IC", dummyIC)
+                     }
+                 }
+                 if (SARToTrack === "HV") {
+                     print("Reducing using HV")
+                     var theSARCollection = ee.ImageCollection(SensorInputS1)
+                     var thePolarizedSARCollection = theSARCollection
+                         .filter(ee.Filter.listContains('transmitterReceiverPolarisation', SARToTrack))
+                     var thePolarizedSARCollectionHere = thePolarizedSARCollection.filterBounds(defaultStudyArea)
+                     var dummyIC = ee.ImageCollection(thePolarizedSARCollection.first())
+                         .map(afn_getGermaneValue_HV_S1)
+                     // for a complex reason, this is for if there is no matching image for a given day, this has the right structure needed for merging.
+                     if (verbose) {
+                         // Map.addLayer(theSARCollection,{},"Unreduced IC across all times") // non-homogeneous collection, cannot be drawn.
+                         print("Unreduced Polarized IC", thePolarizedSARCollection)
+                         Map.addLayer(thePolarizedSARCollection, {}, "Unreduced Polarized IC")
+                         Map.addLayer(thePolarizedSARCollectionHere, {}, "Unreduced Polarized IC here across all times")
+                         print(SARToTrack + " dummy IC", dummyIC)
+                     }
+                 }
+                 if (SARToTrack === "VH") {
+                     print("Reducing using VH")
+                     var theSARCollection = ee.ImageCollection(SensorInputS1)
+                     var thePolarizedSARCollection = theSARCollection
+                         .filter(ee.Filter.listContains('transmitterReceiverPolarisation', SARToTrack))
+                     var thePolarizedSARCollectionHere = thePolarizedSARCollection.filterBounds(defaultStudyArea)
+                     var dummyIC = ee.ImageCollection(thePolarizedSARCollection.first())
+                         .map(afn_getGermaneValue_VH_S1)
+                     // for a complex reason, this is for if there is no matching image for a given day, this has the right structure needed for merging.
+                     if (verbose) {
+                         // Map.addLayer(theSARCollection,{},"Unreduced IC across all times") // non-homogeneous collection, cannot be drawn.
+                         print("Unreduced Polarized IC", thePolarizedSARCollection)
+                         Map.addLayer(thePolarizedSARCollection, {}, "Unreduced Polarized IC")
+                         Map.addLayer(thePolarizedSARCollectionHere, {}, "Unreduced Polarized IC here across all times")
+                         print(SARToTrack + " dummy IC", dummyIC)
+                     }
+                 }
+                 if (SARToTrack === "VV") {
+                     print("Reducing using VV")
+                     var theSARCollection = ee.ImageCollection(SensorInputS1)
+                     var thePolarizedSARCollection = theSARCollection
+                         .filter(ee.Filter.listContains('transmitterReceiverPolarisation', SARToTrack))
+                     var thePolarizedSARCollectionHere = thePolarizedSARCollection.filterBounds(defaultStudyArea)
+                     var dummyIC = ee.ImageCollection(thePolarizedSARCollection.first())
+                         .map(afn_getGermaneValue_VV_S1)
+                     // for a complex reason, this is for if there is no matching image for a given day, this has the right structure needed for merging.
+                     if (verbose) {
+                         // Map.addLayer(theSARCollection,{},"Unreduced IC across all times") // non-homogeneous collection, cannot be drawn.
+                         print("Unreduced Polarized IC", thePolarizedSARCollection)
+                         Map.addLayer(thePolarizedSARCollection, {}, "Unreduced Polarized IC")
+                         Map.addLayer(thePolarizedSARCollectionHere, {}, "Unreduced Polarized IC here across all times")
+                         print(SARToTrack + " dummy IC", dummyIC)
+                     }
+                 }
+             }
+         }
+         if (isOptical) {
+             if (isOptical) {
+                 print("whichReduction", whichReduction)
+             }
+             if (whichReduction === "SWIR") {
+                 print("Reducing using SWIR1")
+                 var dummyIC = ee.ImageCollection(ee.ImageCollection(SensorInputL8).first()).map(afn_getGermaneValue_SWIR1_Landsat8and9)
+             }
+             if (whichReduction === "NBR") {
+                 print("Reducing using NBR")
+                 var dummyIC = ee.ImageCollection(ee.ImageCollection(SensorInputL8).first()).map(afn_getGermaneValue_NBR_L8andL9)
+                 // for a complex reason, this is for if there is no matching image for a given day, this has the right structure. that is
+                 // needed for merging.
+             }
+             if (whichReduction === "NDVI") {
+                 print("Reducing using NDVI")
+                 var dummyIC = ee.ImageCollection(ee.ImageCollection(SensorInputL8).first()).map(afn_getGermaneValue_NDVI_L8andL9)
+                 // for a complex reason, this is for if there is no matching image for a given day, this has the right structure. that is
+                 // needed for merging.
+             }
+         }
+         if (whichReduction === "count" || whichReduction === "binary") {
+             print("Reducing using count or binary")
+             var dummyIC = ee.ImageCollection.fromImages([ee.Image(0).toInt().rename([bandName_reduction])]) // default count everywhere is 0.
+         }
+         if (whichReduction === "mode") { // for now, useful only for Dynamic World images. Other image streams are floats and don't have a mode.
+             print("Reducing using mode")
+             // var dummyIC = ee.ImageCollection([])
+             var dummyIC = ee.ImageCollection(ee.ImageCollection(SensorInputDW).first()) //.select([0])
+         }
+         if (verbose) {
+             // Map.addLayer(dummyIC, {}, "31.dummyIC") // nothing to see since it is somewhere else in the world, made from the first image in the collection for structural reasons.
+             // print("Reduction is: ", whichReduction)
+             // print("3111111111111111111111.dummyIC", dummyIC)
+         }
+         // The downstream filtering code wants to have a month and day for a given year. The interface upstream
+         // of this point uses DOYs. Rather than change the 20 places where the DOYs are used, we will convert the DOY
+         // into Month and Day here. Note that we are not worrying about leap years.
+         // var startMonth = 5 // testing
+         // var startDay = 1 // testing
+         // var endMonth = 11 // testing
+         // var endDay = 1 // testing
+         var startMonth = afn_DOYToMonth(groupStartDOY, 1970)
+         var startDay = afn_DOYToDay(groupStartDOY, 1970)
+         var endMonth = afn_DOYToMonth(groupEndDOY, 1970)
+         var endDay = afn_DOYToDay(groupEndDOY, 1970)
+         // if (verbose) {
+         print("For year(s)", whichYears)
+         print("For DOY", groupStartDOY)
+         print("Month", startMonth)
+         print("Day", startDay)
+         print("For DOY", groupEndDOY)
+         print("Month", endMonth)
+         print("Day", endDay)
+         // }
+         // print("dayStepSize", dayStepSize)
+         var dayStepSizeMillis = dayStepSize * 24 * 60 * 60 * 1000
+         // print("dayStepSizeMillis", dayStepSizeMillis)
+         function afn_nestedYear(theYear) {
+             // returns a sequence for all requested dates in a year. jumping correctly by the day step size.
+             // and for all sensors that are active. Values are merged by median across the selected sensors.
+             // print("afn_nestedYear params", startMonth, startDay, "to", endMonth, endDay, "for year", theYear)
+             // Let's first calculate the milliseconds for the start date and end date of this year. Note that to
+             // span a year end, we would have put the bigger DOY as the start and the smaller as the end.
+             var startDateMillis = ee.Date.fromYMD(theYear, startMonth, startDay).millis()
+             var endDateMillis = ee.Date.fromYMD(theYear, endMonth, endDay).millis()
+             // print("before overyear check", startDateMillis, endDateMillis)
+             // let's see if the start day is *after* the end day. That would imply
+             // going from November to the following February, for example.
+             // if that's the case, then revise the year to be the next year
+             // when calculating the end date millis.
+             // Because the months are javaScript numbers, we'll do the test on the month rather than the
+             // millis, which are ee.Numbers and thus not good for an if statement.
+             if (parseInt(startMonth, 10) > parseInt(endMonth, 10)) {
+                 // if start month is later than end month, we conclude we are talking about spanning a year's end. So in that
+                 // case, build the ee.Date using the following Year value, ie theYear+1.
+                 var endDateMillis = ee.Date.fromYMD(parseInt(theYear, 10) + 1, endMonth, endDay).millis()
+             }
+             // now we have the startDateMillis and endDateMillis for this call of gathering collections.
+             if (verbose) {
+                 print("time stamps for gathering images:")
+                 print(startDateMillis, endDateMillis)
+             }
+             var listOfMillis = ee.List.sequence(startDateMillis, endDateMillis, dayStepSizeMillis)
+             // var listOfDates = ee.List.sequence(firstDOY, lastDOY, dayStepSize)
+             // print("listOfMillis", listOfMillis)
+             function afn_nestedDay(binStartMillis) {
+                 var start = ee.Date(binStartMillis)
+                 // initialize theImageList for today.
+                 var theImageList = [dummyIC] // dummyIC still is needed for a reason I can't understand. But seems harmless.
+                 // Initialize a tiny list for today. MODIS_specific.
+                 var theImageListMO = [dummyIC] // dummyIC still is needed for a reason I can't understand. But seems harmless.
+                 // var base = ee.Date.fromYMD(theYear, 1, 1)
+                 // var start = base.advance(theDOY, 'day')
+                 var end = ee.Date(binStartMillis).advance(dayStepSize, 'day')
+                 // var dayRange = ee.Number(lastDOY).subtract(ee.Number(firstDOY))
+                 var multiSensorTimeSlice = dummyIC // in case there is no matching image for this day, it still returns
+                 // an image with the right structure.
+                 if (datasetSelection.DW) {
+                     print("Gathering DW evidence")
+                     // var theImageList = []
+                     var oneTimeSlice = ee.ImageCollection(SensorInputDW)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                     oneTimeSlice = dummyIC.merge(oneTimeSlice)
+                     // print("DW images to integrate:", oneTimeSlice.size())
+                     if (whichReduction === "mode") {
+                         // var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice.select('label').mode().toInt().rename([bandName_reduction]))
+                         // var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice.size().toInt().rename([bandName_reduction]))
+                         // var oneTimeSliceReduction = ee.Image(42)
+                         // print("FU2")
+                         // print(oneTimeSlice)
+                         var oneTimeSliceReduction = oneTimeSlice.select('label').mode()
+                         // size().toInt().rename([bandName_reduction])
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(10.0))}); // this line for testing
+                     // theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.L5) {
+                     print("Gathering L5 evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputL5)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                         .filter(ee.Filter.lt(CloudCoverNameInputL5, CloudCoverThresholdL5))
+                     // print("L5 images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                         .map(afn_cloudMaskIC_L5andL7)
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_L5)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_L5)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_Landsat5and7)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(5.0))}); // this line for testing
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.L7) {
+                     print("Gathering L7 evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputL7)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                         .filter(ee.Filter.lt(CloudCoverNameInputL7, CloudCoverThresholdL7))
+                     // print("L7 images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                         .map(afn_cloudMaskIC_L5andL7)
+                         .map(applyScaleFactorsL789)
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_L7)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_L7)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_Landsat5and7)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(7.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.L8) {
+                     print("Gathering L8 evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputL8)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                         .filter(ee.Filter.lt(CloudCoverNameInputL8, CloudCoverThresholdL8))
+                     // print("L8 images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                         .map(maskSrCloudsL8andL9)
+                         .map(applyScaleFactorsL789)
+                      // print('test print L8 collection before transformation', oneTimeSliceCloudMasked)
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_L8andL9)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_L8andL9)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_Landsat8and9)
+                         oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceReduction)
+                         // oneTimeSliceReduction = ee.ImageCollection(ee.Image(1.2))
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(8.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.L9) {
+                     print("Gathering L9 evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputL9)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                         .filter(ee.Filter.lt(CloudCoverNameInputL9, CloudCoverThresholdL9))
+                     // print("L9 images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                         .map(maskSrCloudsL8andL9)
+                         .map(applyScaleFactorsL789)
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_L8andL9)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_L8andL9)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_Landsat8and9)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(9.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.MO) {
+                     print("Gathering MODIS evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputMO)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+                     // .filter(ee.Filter.lt(CloudCoverNameInputMO, CloudCoverThresholdMO)) // there is no cloud cover band.
+                     // print("MO images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                     // .map(afn_cloudMaskIC_MO)
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_MO)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_MO)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_MO)
+                     }
+                     // below line is for testing
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).multiply(0).add(0.9))});
+                     if (MODISIncorporationStyle === "under") {
+                         theImageListMO.push(ee.FeatureCollection(oneTimeSliceReduction)) // add any matching images to the MODIS-specific list.
+                     } else if (MODISIncorporationStyle === "integrated") { // add any matching images to the general list
+                         theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                     }
+                     // print(MODISIncorporationStyle, "MODISIncorporationStyle xxxx 1")
+                 } // end of if MODIS is activated.
+                 if (datasetSelection.AL) {
+                     print("Gathering ALOS/Palsar evidence")
+                     var oneTimeSlice = thePolarizedSARCollectionHere
+                         .filterDate(start, end)
+                     if (SARToTrack === "RFDI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice)
+                             .map(afn_getGermaneValue_RFDI_AL)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(11.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                     print("111b.AL")
+                 }
+                 if (datasetSelection.S1) {
+                     print("Gathering S1 evidence")
+                     var oneTimeSlice = thePolarizedSARCollectionHere
+                         .filterDate(start, end)
+                     if (SARToTrack === "HH") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice)
+                             .map(afn_getGermaneValue_HH_S1)
+                     }
+                     if (SARToTrack === "HV") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice)
+                             .map(afn_getGermaneValue_HV_S1)
+                     }
+                     if (SARToTrack === "VH") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice)
+                             .map(afn_getGermaneValue_VH_S1)
+                     }
+                     if (SARToTrack === "VV") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSlice)
+                             .map(afn_getGermaneValue_VV_S1)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(11.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                     print("111b.S1")
+                 }
+                 if (datasetSelection.S2) { // S2
+                     print("Gathering S2 evidence")
+                     if (theYear >= 2015) {
+                         // use CloudScore Plus, as described here at G4G23:
+                         // goo.gle/g4g23-cloud-score-plus
+                         if (verbose) {
+                             print("Using CloudScore Plus for S2 images in or after 2015- i.e., all images")
+                         }
+                         var oneTimeSlice = linkedS2AndCloudScorePlusIC
+                             .filterBounds(defaultStudyArea)
+                             .filterDate(start, end)
+                             .map(maskLowQA)
+                             .map(applyScaleFactorsS2)
+                     } //else if (theYear >= 2019) {
+                    //     if (verbose) {
+                    //         print("Using s2Cloudless for S2 images [2019, 2021)")
+                    //     }
+                    //     var S2cloudlessParams = {
+                    //         s2cloudless: S2dictionary['s2cloudless'],
+                    //         defaultStudyArea: defaultStudyArea,
+                    //         startMillis: start,
+                    //         endMillis: end,
+                    //     } // put the s2 image-level threshold into s2Cloudless to pick it up there
+                    //     S2cloudlessParams.s2cloudless['CloudCoverThresholdS2'] = CloudCoverThresholdS2;
+                    //     var oneTimeSlice = ee.ImageCollection(afn_cloudMasking.get_s2_cloudless(S2cloudlessParams)
+                    //         .filterBounds(defaultStudyArea)
+                    //         .filterDate(start, end)
+                    //         .map(applyScaleFactorsS2))
+                    // } else if (theYear < 2019) {
+                    //     if (verbose) {
+                    //         print("Using afn_cloudMaskIC_olderS2 for S2 images <2019")
+                    //     }
+                    //     var oneTimeSlice = ee.ImageCollection(SensorInputS2)
+                    //         .filterBounds(defaultStudyArea)
+                    //         .filterDate(start, end)
+                    //         .filter(ee.Filter.lt(CloudCoverNameInputS2, CloudCoverThresholdS2))
+                    //         .map(afn_cloudMaskIC_olderS2)
+                    //         .map(applyScaleFactorsS2)
+                    // }
+                     // print("S2 images to integrate:", oneTimeSlice.size())
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                     if (whichReduction === "NBR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NBR_S2)
+                     }
+                     if (whichReduction === "NDVI") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_NDVI_S2)
+                     }
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select(0).count().toInt().rename([bandName_reduction]))
+                     }
+                     if (whichReduction === "SWIR") {
+                         var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked)
+                             .map(afn_getGermaneValue_SWIR1_S2)
+                     }
+                     // oneTimeSliceReduction = oneTimeSliceReduction.map(function(y){return(ee.Image(y).add(-2.0))});
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 if (datasetSelection.FI) {
+                    print("Gathering FI evidence")
+                     var oneTimeSlice = ee.ImageCollection(SensorInputFI)
+                         .filterBounds(defaultStudyArea)
+                         .filterDate(start, end)
+
+                     var oneTimeSliceCloudMasked = oneTimeSlice
+                    var firmsBandName = FIdictionary.bandName
+                     if (whichReduction === "count" || whichReduction === "binary") {
+                        var oneTimeSliceReduction = ee.ImageCollection(oneTimeSliceCloudMasked.select([firmsBandName]).count().toInt().rename([bandName_reduction]))
+                     }
+                     theImageList.push(ee.FeatureCollection(oneTimeSliceReduction))
+                 }
+                 /////////////////////////////////////////////////////////////////////////////////////////
+                 // Now, create a collection with 1 image for each date interval of dayStepSize days
+                 // what operation to do if multiple images are seen on the same day?
+                 // We've assembled the image list for this time interval. Let's flatten it as needed.
+                 if (whichReduction != "mode") {
+                     multiSensorTimeSlice = ee.ImageCollection(ee.FeatureCollection(theImageList).flatten())
+                     // print("theSliceIC", multiSensorTimeSlice )
+                 }
+                 if (isOptical) {
+                     if (whichReduction === "NBR" || whichReduction === "NDVI") {
+                         // if we are asking for an NBR estimate, we'll do the median of the multiple images.
+                         var dailyAnswer = multiSensorTimeSlice.median().rename([bandName_reduction])
+                         // the behavior is distinctive in the case where MODIS is selected AND 'under' is the setting.
+                         // in that case, we put any MODIS image below that one.
+                         if (datasetSelection.MO) {
+                             if (MODISIncorporationStyle === "under") {
+                                 // print(MODISIncorporationStyle, "MODISIncorporationStyle xxxx 2")
+                                 var multiSensorTimeSliceMO = ee.ImageCollection(ee.FeatureCollection(theImageListMO).flatten())
+                                 var dailyAnswerMO = multiSensorTimeSliceMO.median().rename([bandName_reduction])
+                                 var otherSensorsUnmasked = dailyAnswer.unmask()
+                                 var unmaskedDailyAnswer = otherSensorsUnmasked.where(otherSensorsUnmasked.eq(0), dailyAnswerMO)
+                                 var newmask = unmaskedDailyAnswer.neq(0)
+                                 dailyAnswer = unmaskedDailyAnswer.updateMask(newmask)
+                             }
+                         }
+                     }
+                     if (whichReduction === "SWIR") {
+                         // if we are asking for a SWIR, we'll do the median of the multiple images.
+                         var dailyAnswer = multiSensorTimeSlice.median().rename([bandName_reduction])
+                         // the behavior is distinctive in the case where MODIS is selected AND 'under' is the setting.
+                         // in that case, we put any MODIS image below that one.
+                         if (datasetSelection.MO) {
+                             if (MODISIncorporationStyle === "under") {
+                                 if (verbose) {
+                                     print(MODISIncorporationStyle, "MODISIncorporationStyle xxxx 2")
+                                 }
+                                 var multiSensorTimeSliceMO = ee.ImageCollection(ee.FeatureCollection(theImageListMO).flatten())
+                                 var dailyAnswerMO = multiSensorTimeSliceMO.median().rename([bandName_reduction])
+                                 var otherSensorsUnmasked = dailyAnswer.unmask()
+                                 var unmaskedDailyAnswer = otherSensorsUnmasked.where(otherSensorsUnmasked.eq(0), dailyAnswerMO)
+                                 var newmask = unmaskedDailyAnswer.neq(0)
+                                 dailyAnswer = unmaskedDailyAnswer.updateMask(newmask)
+                             }
+                         }
+                     }
+                 }
+                 if (isRadar) {
+                     if (datasetSelection.S1) {
+                         if (SARToTrack === "HH" || SARToTrack === "HV" || SARToTrack === "VH" || SARToTrack === "VV") {
+                             var dailyAnswer = multiSensorTimeSlice.median().rename([bandName_reduction])
+                         }
+                     }
+                     if (datasetSelection.AL) {
+                         var dailyAnswer = multiSensorTimeSlice.median().rename([bandName_reduction])
+                     }
+                 }
+                 if (whichReduction === "count") {
+                     // if we are asking for a count, we will do the sum to get a number like 2 or 3.
+                     var dailyAnswer = multiSensorTimeSlice.sum()
+                 }
+                 if (whichReduction === "binary") {
+                     // if we are asking for a boolean Y/N, we will do the sum to get a number like 2 or 3, then test to see if it is gte(1). Any number over or eq(1) is a yes.
+                     var dailyAnswer = multiSensorTimeSlice.sum().gte(1);
+                 }
+                 if (whichReduction === "mode") {
+                     // if we are reducing a classification IC (notably Dynamic World), we will do the mode.
+                     var dailyAnswer = oneTimeSliceReduction
+                     // .mode()
+                     // .rename([bandName_reduction])
+                 }
+                 //////////// now, let's set some properties for this synthesized image for today
+                 //print("222.setting")
+                 dailyAnswer = dailyAnswer
+                     .set('nominalDate', end) // give it the nominal date.
+                     .set('nominalDOY', end.getRelative('day', 'year')) // give it the nominal doy, for later use if needed.
+                     .set('fracDOY', ee.Number(end.getRelative('day', 'year')).divide(365))
+                     .set('floatDate', end.difference(ee.Date('2015-01-01'), 'year'))
+                     // fracDOY and floatDate are slightly different = 0.02 or so, so they are effectively interchangeable.
+                     // e.g., Jan 7 2022 is fracDOY 0.0164, floatDate 7.0173
+                     // .set('dayRange', dayRange)
+                     .set('theSensor', "mixed")
+                     .set('millis', end.millis())
+                     .set('system:time_start', end.millis())
+                 // .set('system:index', theDOY) // would need to be a string.
+                 //print("222.setted")
+                 return (dailyAnswer)
+             } // afn_nestedDay
+             var yearlyAnswer = listOfMillis.map(afn_nestedDay).flatten()
+             return (yearlyAnswer)
+         } // end afn_nestedYear
+         // print(multiYearAnswer, "multi-yr before flattening")
+         print("Entering afn_nestedYear")
+         var multiYearAnswer = whichYears.map(afn_nestedYear)
+         var theList = ee.List(multiYearAnswer).flatten()
+         // print(theList, "theList of images")
+         // ;
+         var theCollection = ee.ImageCollection.fromImages(theList)
+         if (verbose) {
+             print("leaving get Germane Values")
+         }
+         return (theCollection)
+     } // end afn_getGermaneValuesForAGivenPeriod_allSensors
+     // //=======================================================================================================
+     // /*
+     //           Setting Parameters
+     // */
+     // //=======================================================================================================
+     var datasetSelection = gatherCollections_args.datasetSelection;
+     var defaultStudyArea = gatherCollections_args.defaultStudyArea;
+     var dayStepSize = gatherCollections_args.dayStepSize;
+     // var allSensorDictionary = gatherCollections_args.allSensorDictionary;
+     if (datasetSelection.L5) {
+         var L5dictionary = gatherCollections_args.L5dictionary;
+     }
+     if (datasetSelection.L7) {
+         var L7dictionary = gatherCollections_args.L7dictionary;
+     }
+     if (datasetSelection.L8) {
+         var L8dictionary = gatherCollections_args.L8dictionary;
+     }
+     if (datasetSelection.L9) {
+         var L9dictionary = gatherCollections_args.L9dictionary;
+     }
+     if (datasetSelection.MO) {
+         var MOdictionary = gatherCollections_args.MOdictionary;
+     }
+     if (datasetSelection.S1) {
+         var S1dictionary = gatherCollections_args.S1dictionary;
+     }
+     if (datasetSelection.AL) {
+         var ALdictionary = gatherCollections_args.ALdictionary;
+     }
+     if (datasetSelection.S2) {
+         var S2dictionary = gatherCollections_args.S2dictionary;
+     }
+     if (datasetSelection.FI) {
+         var FIdictionary = gatherCollections_args.FIdictionary;
+     }
+     if (datasetSelection.DW) {
+         var DWdictionary = gatherCollections_args.DWdictionary;
+     }
+     if (verbose) {
+         print("Verbose Dataset selections inside afn_gatherCollections:")
+         print("datasetSelection", datasetSelection)
+         print("L5dictionary", L5dictionary)
+         print("L7dictionary", L7dictionary)
+         print("L8dictionary", L8dictionary)
+         print("L9dictionary", L9dictionary)
+         print("MOdictionary", MOdictionary)
+         print("ALdictionary", ALdictionary)
+         print("S1dictionary", S1dictionary)
+         print("S2dictionary", S2dictionary)
+         print("FIdictionary", FIdictionary)
+         print("End of list of Dataset selections inside afn_gatherCollections:")
+     }
+     var bandName_reduction = gatherCollections_args.bandName_reduction;
+     // var bandNameToFit = gatherCollections_args.bandNameToFit;
+     var verbose = gatherCollections_args.verbose;
+     var whichReduction = gatherCollections_args.whichReduction;
+     // //=======================================================================================================
+     // /*
+     //           IMAGE COLLECTION CONSTRUCTION
+     // */
+     // //=======================================================================================================
+     var collection = ee.ImageCollection([])
+     //////////////////////////////////////////
+     ////// Gather up any collections marked as 'on'. ////
+     //////////////////////////////////////////
+     // now let's find the earliest start date among the selected data sets. They may be all the same but the user can make them different.
+     // now let's find the latest end date among the selected data sets. They may be all the same but the user can make them different.
+     // now let's find the full set of years for which to run the gathering effort.
+     var whichYears = [];
+     var groupStartDOY = 365 // every date will be less than this
+     var groupEndDOY = 1 // every date will be higher than this
+     if (datasetSelection.L5) {
+         var SensorInputL5 = 'LANDSAT/LT05/C02/T1_L2';
+         var CloudCoverNameInputL5 = 'CLOUD_COVER';
+         var CloudCoverThresholdL5 = L5dictionary['CloudCoverThreshold'];
+         if (verbose) {
+             print("L5dictionary", L5dictionary)
+         }
+         whichYears = afn_mergeStringArrays(whichYears, L5dictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(L5dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(L5dictionary.lastDOY))
+     }
+     if (datasetSelection.L7) {
+         var SensorInputL7 = 'LANDSAT/LE07/C02/T1_L2';
+         var CloudCoverNameInputL7 = 'CLOUD_COVER';
+         var CloudCoverThresholdL7 = L7dictionary['CloudCoverThreshold'];
+         if (verbose) {
+             print("L7dictionary", L7dictionary)
+         }
+         whichYears = afn_mergeStringArrays(whichYears, L7dictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(L7dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(L7dictionary.lastDOY))
+     }
+     if (datasetSelection.L8) {
+         var SensorInputL8 = 'LANDSAT/LC08/C02/T1_L2';
+         if (verbose) {
+             print("SensorInputL8", SensorInputL8)
+             print("L8dictionary", L8dictionary)
+         }
+         var CloudCoverNameInputL8 = 'CLOUD_COVER';
+         var CloudCoverThresholdL8 = L8dictionary['CloudCoverThreshold'];
+         // print("in L8")
+         // print(L8dictionary.yearsList, "L8dictionary.yearsList")
+         // print(whichYears, "whichYears")
+         whichYears = afn_mergeStringArrays(whichYears, L8dictionary.yearsList)
+         // print(whichYears, "whichYears")
+         groupStartDOY = Math.min(groupStartDOY, parseInt(L8dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(L8dictionary.lastDOY))
+     }
+     if (datasetSelection.L9) {
+         var SensorInputL9 = 'LANDSAT/LC09/C02/T1_L2';
+         if (verbose) {
+             print("SensorInputL9", SensorInputL9)
+             print("L9dictionary", L9dictionary)
+         }
+         var CloudCoverNameInputL9 = 'CLOUD_COVER';
+         var CloudCoverThresholdL9 = L9dictionary['CloudCoverThreshold'];
+         whichYears = afn_mergeStringArrays(whichYears, L9dictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(L9dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(L9dictionary.lastDOY))
+     }
+     if (datasetSelection.MO) {
+         var SensorInputMO = 'MODIS/006/MCD43A4';
+         // var CloudCoverNameInputMO = 'Unused';
+         // var CloudCoverThresholdMO = MOdictionary['CloudCoverThreshold'];
+         // print("XXXXXXXXXXX getting value 3")
+         if (verbose) {
+             print("MOdictionary xxxxx", MOdictionary)
+         }
+         var MODISIncorporationStyle = MOdictionary.incorporationStyle
+         whichYears = afn_mergeStringArrays(whichYears, MOdictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(MOdictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(MOdictionary.lastDOY))
+     }
+     if (datasetSelection.S1) {
+         var SensorInputS1 = 'COPERNICUS/S1_GRD'
+         if (verbose) {
+             print("SensorInputS1", SensorInputS1)
+             print("S1dictionary", S1dictionary)
+         }
+         whichYears = afn_mergeStringArrays(whichYears, S1dictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(S1dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(S1dictionary.lastDOY))
+     }
+     if (datasetSelection.AL) {
+        // get just the ones that are descending.
+        // and also that they must have HH and HV.
+         var SensorInputAL = ee.ImageCollection('JAXA/ALOS/PALSAR-2/Level2_2/ScanSAR')
+                .filter(ee.Filter.eq('PassDirection', 'Descending'))
+                .filter(ee.Filter.listContains('Polarizations', 'HH'))
+                .filter(ee.Filter.listContains('Polarizations', 'HV'))
+          // and then select the HH and HV.
+         .select(['HH', 'HV']);
+
+         if (verbose) {
+             print("ALdictionary", ALdictionary);
+         }
+         whichYears = afn_mergeStringArrays(whichYears, ALdictionary.yearsList);
+         groupStartDOY = Math.min(groupStartDOY, parseInt(ALdictionary.firstDOY));
+         groupEndDOY = Math.max(groupEndDOY, parseInt(ALdictionary.lastDOY));
+     }
+     if (datasetSelection.S2) {
+         var SensorInputS2 = 'COPERNICUS/S2_SR_HARMONIZED';
+         // print("SensorInputS2", SensorInputS2)
+         var CloudCoverNameInputS2 = 'CLOUD_COVERAGE_ASSESSMENT';
+         var CloudCoverThresholdS2 = S2dictionary['CloudCoverThreshold'];
+         // Prepare for using CloudScore Plus for some S2 images, as described here at G4G23:
+         // goo.gle/g4g23-cloud-score-plus
+         var csPlus = ee.ImageCollection('GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED');
+         var csPlusBands = csPlus.first().bandNames();
+         // Link S2 and CS+ results.
+         var linkedS2AndCloudScorePlusIC = ee.ImageCollection(SensorInputS2).linkCollection(csPlus, csPlusBands);
+         // print("S2dictionary", S2dictionary)
+         whichYears = afn_mergeStringArrays(whichYears, S2dictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(S2dictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(S2dictionary.lastDOY))
+     }
+    if (datasetSelection.FI) {
+        if (!FIdictionary || !FIdictionary.assetId || !FIdictionary.bandName) {
+            throw new Error('FI dataset requires FIdictionary.assetId and FIdictionary.bandName.');
+        }
+        var SensorInputFI = FIdictionary.assetId;
+         if (verbose) {
+             print("SensorInputFI", SensorInputFI)
+             print("FIdictionary", FIdictionary)
+         }
+         whichYears = afn_mergeStringArrays(whichYears, FIdictionary.yearsList)
+         groupStartDOY = Math.min(groupStartDOY, parseInt(FIdictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(FIdictionary.lastDOY))
+     }
+     if (datasetSelection.DW) {
+         // print("DWdictionary", DWdictionary)
+         var SensorInputDW = 'GOOGLE/DYNAMICWORLD/V1'
+         // whichYears = afn_mergeStringArrays(whichYears, DWdictionary.yearsList) // acting weird.
+         // and plus, we don't want to combine with other data and years. So, just take the yearsList
+         // right off the DW dictionary.
+         var whichYears = DWdictionary.yearsList
+         groupStartDOY = Math.min(groupStartDOY, parseInt(DWdictionary.firstDOY))
+         groupEndDOY = Math.max(groupEndDOY, parseInt(DWdictionary.lastDOY))
+     }
+     if (verbose) {
+         print("Verbose whichYears before bubbleSort", whichYears)
+     }
+     whichYears = afn_bubbleSort(whichYears)
+     if (verbose) {
+         print("Verbose Minimum Start DOY among collections", groupStartDOY)
+         print("Maximum End DOY among collections", groupEndDOY)
+     }
+     var getGermaneValuesParameters = {
+         whichYears: whichYears,
+         groupStartDOY: groupStartDOY,
+         groupEndDOY: groupEndDOY,
+         dayStepSize: dayStepSize,
+         defaultStudyArea: defaultStudyArea,
+         whichReduction: whichReduction,
+         bandName_reduction: bandName_reduction
+     };
+     if (verbose) {
+         print("call 1 to afn_getGermaneValuesForAGivenPeriod_allSensors")
+     }
+     var gatheredReducedMultiSensorValues = afn_getGermaneValuesForAGivenPeriod_allSensors(getGermaneValuesParameters)
+     if (verbose) {
+         print("returned from call A to afn_getGermaneValuesForAGivenPeriod_allSensors")
+     }
+     var gatheredReducedMultiSensorValues = ee.ImageCollection(gatheredReducedMultiSensorValues)
+     if (verbose) {
+         Map.addLayer(gatheredReducedMultiSensorValues, {}, "33b.multiyr")
+     }
+     collection = collection.merge(gatheredReducedMultiSensorValues)
+     if (verbose) {
+         print("Gathered collection", collection)
+         Map.addLayer(collection, {}, "33c.Gathered collection across sensors, gathered, and reduced.")
+     }
+     if (verbose) {
+         print("leaving afn_gatherCollectionsAndReduce")
+     }
+     return collection;
+ }
+ exports.afn_gatherCollectionsAndReduce = afn_gatherCollectionsAndReduce;
+ var testing1 = false
+ if (testing1) {
+     print("RUNNING a bit of TESTING CODE IN AFN_GATHERCOLLECTIONS.")
+     var datasetSelection = {
+         L5: false, //checked for NBR and count. Used dates in 2010
+         L7: false, //checked for NBR and count. Used dates in 2010
+         L8: false, //checked for NBR and count. Used dates in 2016
+         L9: false, //checked for NBR and count. Used dates in 2022
+         MO: false,
+         S1: false,
+         S2: false, //checked for NBR and count. Used dates in 2022
+         DW: false
+     };
+     var verbose = false; // in general, this should be left alone, and be set to false for most runs except when debugging.
+     var recordingLevel = 0 // 0 means record as little as possible; 1 means more, 2 means most.
+     // var whichReduction = "mode"
+     // var bandName_reduction = 'modeLabel'
+     var whichReduction = "median"
+     var bandName_reduction = 'medianLabel'
+     // var whichReduction = "count"
+     // var bandName_reduction = 'anImageCount'
+     // var whichReduction = "binary"
+     // var bandName_reduction = 'imageTodayYN'
+     // var defaultStudyArea = testArea
+     var cambodia = ee.Geometry.Polygon([
+         [
+             [101.87799344030032, 15.058012096848799],
+             [101.87799344030032, 10.149175570341924],
+             [108.23907742467532, 10.149175570341924],
+             [108.23907742467532, 15.058012096848799]
+         ]
+     ])
+     var defaultStudyArea = cambodia
+     print("defaultStudyArea", defaultStudyArea)
+     var multiSensorCollectionParameters = {
+         defaultStudyArea: defaultStudyArea,
+         dayStepSize: 2,
+         whichReduction: whichReduction,
+         bandName_reduction: bandName_reduction,
+         // bandNameToFit: bandNameToFit_afterReduction,
+         datasetSelection: datasetSelection,
+         // /****** Dictionary for all sensors ******/
+         // allSensorDictionary: {
+         //     yearsList: [2022],
+         //     firstDOY: 1,
+         //     lastDOY: 365,
+         //     // CloudCoverThreshold: 30 // this is treated individually for each sensor.
+         // },
+         /****** Landsat 5 dictionary ******/
+         DWdictionary: {
+             yearsList: [2022], //, 2019, 2020, 2021, 2022],
+             firstDOY: 1,
+             lastDOY: 200
+         },
+         verbose: verbose
+     }
+     var theStudyCollection = afn_gatherCollectionsAndReduce(multiSensorCollectionParameters)
+     theStudyCollection = ee.ImageCollection(theStudyCollection)
+     print("1.theStudyCollection", theStudyCollection)
+     print("bandName_reduction", bandName_reduction)
+     // print(" bandNameToFit_afterReduction", bandNameToFit_afterReduction)
+     Map.addLayer(theStudyCollection, {}, "1.theStudyCollection gathered")
+     Map.addLayer(theStudyCollection.count(), {}, "1b.theStudyCollection count")
+     Map.centerObject(defaultStudyArea, 15)
+ }
+ var testing2 = false
+ if (testing2) {
+     print("RUNNING second set of TESTING CODE IN AFN_GATHERCOLLECTIONS.")
+     var datasetSelection = {
+         DW: false,
+         L5: false, //checked for NBR and count. Used dates in 2010
+         L7: false, //checked for NBR and count. Used dates in 2010
+         L8: false, //checked for NBR and count. Used dates in 2016
+         L9: false, //checked for NBR and count. Used dates in 2022
+         MO: false,
+         S1: true,
+         S2: false //checked for NBR and count. Used dates in 2022
+     };
+     var verbose = true; // in general, this should be left alone, and be set to false for most runs except when debugging.
+     print("verbose", verbose)
+     var recordingLevel = 1 // 0 means record as little as possible; 1 means more, 2 means most.
+     var testArea2 =
+         ee.Geometry.Polygon(
+             [
+                 [
+                     [-91.23199492756409, 18.634501075201694],
+                     [-91.23199492756409, 17.548429459645188],
+                     [-89.40826445881409, 17.548429459645188],
+                     [-89.40826445881409, 18.634501075201694]
+                 ]
+             ], null, false)
+     var testArea3 =
+         ee.Geometry.Polygon(
+             [
+                 [
+                     [38.42475556189309, -1.347464310365424],
+                     [38.42475556189309, -5.240413360163223],
+                     [42.29194306189309, -5.240413360163223],
+                     [42.29194306189309, -1.347464310365424]
+                 ]
+             ], null, false)
+     var testArea4 = ee.Geometry.Polygon([
+         [
+             [-63.9533, -10.6813],
+             [-63.9533, -10.1315],
+             [-64.9118, -10.1315],
+             [-64.9118, -10.6813]
+         ]
+     ])
+     var defaultStudyArea = testArea4
+     // var s1Area =     ee.Geometry.Polygon(
+     //     [[[-64.72075653472791, 59.48171715020676],
+     //       [-64.72075653472791, 59.37135197363837],
+     //       [-64.46395111480604, 59.37135197363837],
+     //       [-64.46395111480604, 59.48171715020676]]], null, false);
+     //           var defaultStudyArea = s1Area
+     // var whichReduction = "mode"
+     // var bandName_reduction = 'modeLabel'
+     // var whichReduction = "count"
+     // var bandName_reduction = 'anImageCount'
+     // var whichReduction = "NBR"
+     // var bandName_reduction = 'anNBR'
+     var whichReduction = "VH"
+     var bandName_reduction = 'VH'
+     // var whichReduction = "binary"
+     // var bandName_reduction = 'imageTodayYN'
+     print("defaultStudyArea", defaultStudyArea)
+     Map.addLayer(defaultStudyArea)
+     var multiSensorCollectionParameters = {
+         defaultStudyArea: defaultStudyArea,
+         dayStepSize: 2,
+         whichReduction: whichReduction,
+         bandName_reduction: bandName_reduction,
+         // bandNameToFit: bandNameToFit_afterReduction,
+         datasetSelection: datasetSelection,
+         // /****** Dictionary for all sensors ******/
+         // allSensorDictionary: {
+         //     yearsList: [2022],
+         //     firstDOY: 1,
+         //     lastDOY: 365,
+         //     // CloudCoverThreshold: 30 // this is treated individually for each sensor.
+         // },
+         /****** Landsat 8 dictionary ******/
+         L8dictionary: {
+             yearsList: [2022],
+             firstDOY: 108,
+             lastDOY: 308,
+             CloudCoverThreshold: 100
+         },
+         /****** Landsat 9 dictionary ******/
+         L9dictionary: {
+             yearsList: [2022],
+             firstDOY: 109,
+             lastDOY: 309,
+             CloudCoverThreshold: 100
+         },
+         /****** Landsat 7 dictionary ******/
+         L7dictionary: {
+             yearsList: [2022],
+             firstDOY: 107,
+             lastDOY: 307,
+             CloudCoverThreshold: 37
+         },
+         /****** Landsat 5 dictionary ******/
+         L5dictionary: {
+             yearsList: [2022],
+             firstDOY: 105,
+             lastDOY: 305,
+             CloudCoverThreshold: 45
+         },
+         /*******  Modis dictionary *******/
+         MOdictionary: {
+             yearsList: [2022],
+             firstDOY: 3,
+             lastDOY: 333,
+             // CloudCoverThreshold: 40 // cloud cover band not used for modis.
+         },
+         /****** Sentinel dictionary *****/
+         S1dictionary: {
+             yearsList: [2021],
+             firstDOY: 108,
+             lastDOY: 308,
+         },
+         S2dictionary: {
+             // yearsList: [2020, 2021],
+             yearsList: [2019],
+             firstDOY: 1, // 102,
+             lastDOY: 365, // 302,
+             CloudCoverThreshold: 97,
+             s2cloudless: { //https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless
+                 // CloudCoverThreshold: 70, // Maximum image cloud cover percent allowed in image collection
+                 cld_prb_thresh: 57, // Cloud probability (%); values greater than are considered cloud
+                 nir_drk_thresh: 0.17, // Near-infrared reflectance; values less than are considered potential cloud shadow
+                 cld_prj_dist: 3.7, // Maximum distance (km) to search for cloud shadows from cloud edges
+                 Buffer: 47, // Distance (m) to dilate the edge of cloud-identified objects
+                 AOI: defaultStudyArea
+             },
+         },
+         /****** Dynamic World dictionary ******/
+         DWdictionary: {
+             yearsList: [2020], //, 2019, 2020, 2021, 2022],
+             firstDOY: 1,
+             lastDOY: 365
+         },
+         verbose: verbose
+     }
+     Map.centerObject(defaultStudyArea, 15)
+     print("going to afn_gatherCollectionsAndReduce")
+     var theStudyCollection = ee.ImageCollection(afn_gatherCollectionsAndReduce(multiSensorCollectionParameters))
+     print("1.theStudyCollection", theStudyCollection)
+     print("bandName_reduction", bandName_reduction)
+     // print(" bandNameToFit_afterReduction", bandNameToFit_afterReduction)
+     if (whichReduction === "NBR" || whichReduction === "NDVI") {
+         var theMin = 0.0
+         var theMax = 0.8
+     }
+     if (whichReduction === "HH") {
+         var theMin = -12.0
+         var theMax = 1.3
+     }
+     if (whichReduction === "HV" || whichReduction === "VH") {
+         var theMin = -20
+         var theMax = -10
+     }
+     if (whichReduction === "VV") {
+         var theMin = -15
+         var theMax = -4
+     }
+     var videoArgs = {
+         region: defaultStudyArea,
+         min: theMin,
+         max: theMax,
+         format: 'gif',
+         framesPerSecond: 3,
+     };
+     // Map.addLayer(theStudyCollection.first(), {}, "first")
+     print(ui.Thumbnail(theStudyCollection, videoArgs))
+     Map.addLayer(theStudyCollection, {}, "1a.theStudyCollection")
+     Map.addLayer(theStudyCollection.count(), {}, "1b.theStudyCollection count")
+     Map.addLayer(theStudyCollection.median(), {}, "1c.theStudyCollection median")
+     Map.addLayer(theStudyCollection.mean(), {}, "1c.theStudyCollection mean")
+     Map.addLayer(theStudyCollection.max(), {}, "1c.theStudyCollection maximum")
+     // testing adding items to the collection. they have a 'doy' property for each image.
+     var harmonicFunctionsModule = require("users/alemlakes/CommonCode2:/502.7-Harmonics/502.7-1h5-HarmonicFunctions")
+     var var_args_timeBand = {}
+     var_args_timeBand.dateProperty = "floatDate"
+     var_args_timeBand.timeBandName = "t"
+     var afn_addTimeBandUsingPropertyNameToIC = harmonicFunctionsModule.afn_addTimeBandUsingPropertyNameToIC
+     var tbIC = afn_addTimeBandUsingPropertyNameToIC(theStudyCollection, var_args_timeBand)
+     Map.addLayer(tbIC.first(), {}, "first w t")
+     Map.addLayer(tbIC, {}, "tbIC w t")
+     var afn_addLinearConstantToIC = harmonicFunctionsModule.afn_addLinearConstantToIC
+     var tbIC = afn_addLinearConstantToIC(tbIC, 1, "const")
+     Map.addLayer(tbIC, {}, "tb2 w const and t")
+     var afn_addCosAndSinBandsToIC = harmonicFunctionsModule.afn_addCosAndSinBandsToIC
+     var var_args_harmonicBds = {}
+     var_args_harmonicBds.timeBandName = "t"
+     var_args_harmonicBds.nonStandardPeriodBoolean = false
+     var_args_harmonicBds.nonStandardPeriodValue = "unused"
+     var_args_harmonicBds.cosName = "theCos"
+     var_args_harmonicBds.sinName = "theSin"
+     var tbIC = afn_addCosAndSinBandsToIC(tbIC, var_args_harmonicBds)
+     Map.addLayer(tbIC, {}, "t3 w const and t and cos1 and cos2")
+     var_args_harmonicBds.nonStandardPeriodBoolean = true
+     var_args_harmonicBds.nonStandardPeriodValue = 1
+     var_args_harmonicBds.cosName = "COS2"
+     var_args_harmonicBds.sinName = "SIN2"
+     var tbIC = afn_addCosAndSinBandsToIC(tbIC, var_args_harmonicBds)
+     Map.addLayer(tbIC, {}, "tbIC4 w const and t and cos1 sin1 and cos2 sin2")
+     var_args_harmonicBds.nonStandardPeriodBoolean = true
+     var_args_harmonicBds.nonStandardPeriodValue = 0.5
+     var_args_harmonicBds.cosName = "COS4"
+     var_args_harmonicBds.sinName = "SIN4"
+     var tbIC = afn_addCosAndSinBandsToIC(tbIC, var_args_harmonicBds)
+     Map.addLayer(tbIC, {}, "tbIC4 w const and t and cos1 sin1 and cos2 sin2 and cos3 sin3")
+ }

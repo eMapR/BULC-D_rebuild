@@ -85,17 +85,25 @@ plotting_means: true
 verbose: false
 
 # Still a placeholder for BULCD-AdvancedParameters-v5's full, real
-# contents, but three fields below are now typed - see CLAUDE.md
-# "Reference papers" and bulcd/config/schema.py's BULCAdvancedParams.
+# contents, but four fields below are now typed - see docs/findings.md
+# "Real production BULC-D parameters" and bulcd/config/schema.py's
+# BULCAdvancedParams.
 bulc_advanced_params:
   dampening_factor: 0.5  # paper's own tested value; d=1.0 (no dampening) was found
                          # to produce extreme overconfidence in a live-EE test run
-  # NOT part of the reconstructed classic method (see CLAUDE.md "Recency
-  # weighting") - an optional extension, off by default (1.0). Only turn
-  # this on if you've read that section and understand the tradeoff;
-  # 0.98 fixed one real long-baseline-masking case in testing, but this
-  # is not a validated universal default.
+  # NOT part of the reconstructed classic method (see docs/decisions/0005) -
+  # an optional extension, off by default (1.0). Only turn this on if
+  # you've read that decision and understand the tradeoff; 0.98 fixed one
+  # real long-baseline-masking case in testing, but this is not a
+  # validated universal default.
   recency_factor: 1.0
+  # CONFIRMED against the real BULC-Minimal-Module-107 source (2026-08-10)
+  # to be part of the actual classic method - production dampens the
+  # POSTERIOR after every Bayes update, not just the incoming evidence
+  # (dampening_factor above). Defaults to 1.0 (off) here pending
+  # validation and a considered default choice - see docs/decisions/.
+  # Production's own confirmed value is 0.9.
+  posterior_leveler: 1.0
   # Willis (2022)'s own worked example for NBR12 (this study's example,
   # NOT a shipped production default - BAI or other reduction bands need
   # a differently-shaped matrix; see the thesis's Figure A4/A5). Reduction
