@@ -21,6 +21,7 @@ GEE.
 
 ## Reference papers
 
+
 Two published papers (added 2026-07-29) stand in for the missing legacy
 algorithm source and are the actual basis for the engine code in
 `bulcd/bulc.py` and `bulcd/inputs.py`'s `organize_inputs()`:
