@@ -33,7 +33,6 @@ def test_loads_example_config():
     assert config.evidence.sensors["L8"].enabled is True
     assert config.evidence.sensors["L8"].first_year == 2013
     assert config.evidence.sensors["L8"].last_year is None
-    assert config.evidence.sensors["S2"].s2_cloud_mask.cld_prb_thresh == 50
     assert config.evidence.sensors["S1"].sar_polarization == "HV"
 
     assert config.reduction.band == "swir"
@@ -132,21 +131,6 @@ def test_sar_polarization_rejected_for_non_sar_sensor(tmp_path):
         "      sar_polarization: HV\n"
     )
     with pytest.raises(ConfigError, match="sar_polarization"):
-        load_config(bad_config)
-
-
-def test_s2_cloud_mask_rejected_for_non_s2_sensor(tmp_path):
-    bad_config = tmp_path / "bad.yaml"
-    bad_config.write_text(
-        "study_area:\n"
-        "  aoi_asset: users/x/y\n"
-        "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: true\n"
-        "      s2_cloud_mask: {}\n"
-    )
-    with pytest.raises(ConfigError, match="s2_cloud_mask"):
         load_config(bad_config)
 
 

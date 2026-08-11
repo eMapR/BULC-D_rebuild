@@ -1065,3 +1065,163 @@ part of the still-missing `BULCD-AnalysisParameters-v5`) before calling
 something a confirmed "large drop" - a real design pattern (don't trust
 the probability alone) this rebuild doesn't currently have an equivalent
 of.
+
+**`BULCD-AnalysisParameters-v5` obtained (2026-08-10, later same
+session)** - the last missing parameter file, found by the user directly
+(not via Code Editor navigation this time). Real values:
+`dropThresholdToDenoteChange: 0.59`, `gainThresholdToDenoteChange: 0.39`
+(asymmetric - easier to flag "gain" than "drop"), `expPeriodMeanThreshold: 0.5`,
+`targetPeriodMeanThreshold: 0.4`, `wasItEverType: 'down'`,
+`wasItEverComparison: 'gt'`, `wasItEverValue: 0.3`, `timingThreshhold: 0.3`
+(same value reused for both `wasItEver` and the timing/first-crossing
+logic), `maxExportPixels: 1e13` (matches this rebuild's existing
+`ExportConfig.max_pixels` default exactly - a nice independent
+confirmation). Per the file's own comment, these are all *post-run*
+thresholds applied to `finalBULCprobs`/`probabilityStackThroughTime` -
+they don't affect `run_bulcd()`'s output at all, only `interpret.py`'s
+still-unimplemented redesign. Not yet used in code.
+
+## Cloud masking was wrong for every sensor - fixed, still inert (2026-08-10)
+
+Re-reading `515-gatherCollections27b.txt` (already fetched, saved from
+the `dayStepSize` investigation) surfaced two more real, previously
+unchecked discrepancies, found without any new fetching:
+
+**Landsat: production uses two different cloud-mask functions, this
+rebuild used one unified one for all four sensors.**
+`afn_cloudMaskIC_L5andL7` checks only QA_PIXEL bits 3 (cloud shadow) and
+4 (cloud). `maskSrCloudsL8andL9` checks bits 0-4 (fill, dilated cloud,
+cirrus, cloud, cloud shadow) via `bitwiseAnd(0b11111)` PLUS a separate
+`QA_RADSAT` saturation mask entirely. `_mask_landsat_clouds()` checked
+bits `{1,3,4}` for every sensor - an extra, incorrect bit-1 check for
+L5/L7, and missing bit-0/bit-2/the saturation mask entirely for L8/L9.
+
+**Sentinel-2: production doesn't use s2cloudless at all.** It uses
+Google Cloud Score+ (`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`, band
+`cs` >= 0.60) - confirmed as the *only* live path for any year >= 2015
+(a comment notes this was switched over in an Oct 2024 update: "cloudscore
+now used for 2015+"), which covers every year this rebuild's configs
+use. The s2cloudless community recipe (cloud-probability join + NIR
+dark-pixel shadow projection) implemented when S2 support was first
+added is a completely different algorithm, not a parameter variant.
+
+**Fixed**: split `_mask_landsat_clouds()` into
+`_mask_landsat_clouds_l5_l7()`/`_mask_landsat_clouds_l8_l9()`, dispatched
+by sensor code. Replaced S2's entire cloud-mask implementation with
+Cloud Score+ via `.linkCollection()` (matching production's own real
+code path, `linkedS2AndCloudScorePlusIC`) - genuinely simpler than the
+s2cloudless recipe it replaced. Removed `S2CloudMaskConfig`/
+`SensorEvidenceConfig.s2_cloud_mask` entirely (the legacy `s2cloudless`
+dictionary in `BULCD-InputParameters-v5` is vestigial in production's
+real, currently-running code - confirmed by the source itself, not
+inferred). 1 test removed (`test_s2_cloud_mask_rejected_for_non_s2_sensor`,
+no longer applicable), 1 updated; 35 total, all pass.
+
+**VALIDATED against real Earth Engine, same three points as every check
+in this thread: numbers moved only slightly - nowhere near the
+`dayStepSize` fix's clear shift.** E.g. centroid: `decrease 0.8198/unchanged
+0.1271` -> `decrease 0.8195/unchanged 0.1274` (~0.03 percentage points).
+Real, confirmed, correctly-fixed bugs across every one of cell 8C's three
+enabled sensors, but essentially inert for this specific config/AOI -
+the fifth of eight total fixes this session (after the three that were
+also inert: `initializing_leveler`, the z-score formula, modality/R2) to
+validate correctly without moving the classification. `dayStepSize`
+remains the only fix in this entire investigation that produced a real,
+measurable shift.
+
+**Assessment at this point:** seven real, source-confirmed bugs fixed
+across the whole Bayesian core and evidence-assembly pipeline this
+session, six new production source files obtained. Cell 8C is closer to
+the GUI's render than when this investigation started (dayStepSize alone
+moved `unchanged` from ~4% to ~13% at two of three points) but still
+`decrease`-dominant, not a match. Given how consistently every fix since
+`dayStepSize` has validated correct but changed nothing, further
+single-formula fixes are unlikely to close the remaining gap by
+themselves - the two candidates still genuinely unfetched
+(`BULCD-ExportParameters-v5`, and whatever `512.BULC-D CloudMasking`
+actually contains, though it appears to be dead code in the confirmed
+live path) are lower-confidence leads than anything found so far. This
+may be the point of diminishing returns for this specific investigation
+thread.
+
+## Root cause found: two mask-propagation bugs, not a formula mismatch (2026-08-10)
+
+Per the user's direction ("I would like to continue hunting for the
+problem", then "yes, trace it"), rather than settling for the assessment
+above, did a full step-by-step trace of the Bayesian fold. First surfaced
+a real but secondary visual artifact (a Sentinel-2 MGRS tile-overlap
+seam at cell 8C's boundary, both sides still majority-red - confirmed
+real via footprint geometry, confirmed NOT the primary cause since it
+didn't explain the AOI-wide red bias). Then, per "use python to help
+you": pulled the real per-step z-score bin sequence at the cell 8C
+centroid (123 steps, 2024-06 through 2025-mid, via
+`organized.lof_zscore` + `_bin_zscore()`) into a local JSON file and
+hand-simulated `bulc.run_bulc()`'s fold in plain Python - first attempt
+used two separate `aggregate_array()` calls to pull dates and bins
+independently, which (not caught immediately) silently returned
+misaligned pairs under load; fixed by extracting both values from the
+SAME `FeatureCollection` feature via `.getInfo()`, querying in quarterly
+chunks rather than one large range.
+
+With correctly-aligned data (69 valid steps, 54 masked/no-data - 44% of
+the full 123-step sequence), a Python simulation treating masked steps
+as true no-ops (skip entirely, prior carries forward unchanged) produced
+`unchanged ≈ 90.6%` - matching the evidence's own bin distribution and
+the GUI's expected render. Forcing the simulation to instead replicate
+the pipeline's real (at-the-time) masking behavior reproduced the
+observed `decrease`-dominant discrepancy almost exactly. This isolated
+the entire remaining gap to mask handling specifically, not any further
+formula/parameter mismatch - a real turning point after seven fixes that
+had each validated correct but moved nothing.
+
+Direct EE queries then confirmed two distinct bugs, both now fixed (full
+writeup: [decisions/0009](decisions/0009-masking-bugs-resolve-the-classification-gap.md)):
+
+1. **`engine.py`'s `_bin_to_update_factors()`**: its `.where()` chain
+   doesn't propagate the input bin image's mask - confirmed directly at
+   a known-masked date (2024-03-17, cell 8C centroid), it returned
+   `[0.83, 0.08, 0.08]` (bin 1's row, the single most extreme "decrease"
+   value in the whole matrix) instead of staying masked. Every one of
+   the 54 masked/no-data steps was silently injected as maximum-
+   confidence "decrease" evidence. Fix: `.updateMask(binned_image.mask())`
+   on the return value.
+2. **`bulc.py`'s `run_bulc()`**: `bayes_update()` used to call
+   `.unmask(prior)` immediately, before `posterior_leveler`'s `dampen()`
+   ran - so a no-data step's already-restored-to-prior posterior still
+   got pulled partway toward uniform. Confirmed against the real
+   `BULC-Minimal-Module-107` source (`legacy/BULC-Minimal-Module-107.txt`
+   lines 590-600): production rebalances the masked, valid-pixel-only
+   slice FIRST, then merges onto the untouched prior via `.where(...)` -
+   rebalance-then-merge, not merge-then-rebalance. Fix: `bayes_update()`
+   no longer unmasks; `_step()` now applies `dampen()`/`discount()` to
+   the still-masked posterior (both mask-preserving arithmetic, so
+   correct no-ops there) and calls `.unmask(prior)` exactly once, at the
+   end.
+
+**VALIDATED against real Earth Engine, same three cell 8C points used
+throughout this investigation.** Bug 1 alone, for the first time in this
+investigation, flipped all three points to `unchanged`-dominant:
+
+| Point | Before (7 prior fixes only) | After bug 1 | After bug 1 + bug 2 |
+|---|---|---|---|
+| centroid | decrease 0.82 / unchanged 0.13 | decrease 0.128 / unchanged 0.739 | decrease 0.044 / **unchanged 0.906** |
+| red_pt_1 | decrease-dominant | decrease 0.097 / unchanged 0.805 | decrease 0.043 / **unchanged 0.914** |
+| red_pt_2 | decrease-dominant | decrease 0.203 / unchanged 0.628 | decrease 0.112 / **unchanged 0.833** |
+
+35/35 tests still pass (this masking behavior isn't unit-testable
+without a live EE session - same caveat as the rest of this codebase's
+image-math logic).
+
+Both bugs share one root cause worth generalizing: EE's `.where()` does
+not propagate a masked *condition*'s mask onto its output, and
+`.unmask(x)` unconditionally fills masked pixels regardless of whether
+that's semantically correct at that specific point in a multi-step
+chain. This explains, in hindsight, why every one of the seven earlier
+fixes (posterior_leveler, initializing_leveler, z-score formula,
+dayStepSize, modality, R2, cloud masking) validated correct but left the
+classification almost untouched except for dayStepSize: none of them
+touched mask handling, so all were real, correct improvements running
+downstream of these two bugs' systematically wrong "decrease" signal on
+every no-data day. Likely the resolution of this entire investigation
+thread - still only validated at three points, not a full-AOI visual
+comparison against the actual GUI render.

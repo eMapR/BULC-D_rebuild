@@ -328,7 +328,12 @@ useful context that isn't obvious from the field names alone:
   availability. Sentinel-1 swaps `CloudCoverThreshold` for
   `SARValueToTrack` (polarization: HH/HV/VH/VV) since radar isn't
   affected by cloud. Sentinel-2 additionally nests an `s2cloudless`
-  block (see [Google's s2cloudless tutorial](https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless)).
+  block (see [Google's s2cloudless tutorial](https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless))
+  in the legacy `BULCD-InputParameters-v5` file — **CONFIRMED 2026-08-10
+  as vestigial**: `515-gatherCollections27b`'s real, currently-running
+  source shows Google Cloud Score+ as the only live S2 cloud-mask path
+  for any usable year, not s2cloudless at all (see "Current code state"
+  below) — `bulcd/config/schema.py` has no `s2_cloud_mask` field to match.
 - **`datasetSelection`** sensor codes: `L5`/`L7`/`L8`/`L9` = Landsat,
   `MO` = MODIS, `S2`/`S1` = Sentinel-2/1, `AL` = ALOS (SAR), `NI` =
   NICFI (Planet), `DW` = Dynamic World. The last three aren't mentioned
@@ -393,7 +398,7 @@ useful context that isn't obvious from the field names alone:
   length + 1 matching the transition matrix's row count, `dampening_factor`
   in `(0, 1]`), raises `ConfigError` with a specific message rather than
   silently defaulting — a bad config here means a real, billed Earth
-  Engine export runs against the wrong AOI/dates. 18 passing tests in
+  Engine export runs against the wrong AOI/dates. 24 passing tests in
   `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
   example (including a transcription of Willis (2022)'s worked NBR12
   transition matrix, clearly commented as an example, not a shipped
@@ -403,14 +408,26 @@ useful context that isn't obvious from the field names alone:
   matching" and "Real production BULC-D parameters" entries.
 - `bulcd/inputs.py` — PARTIAL. Real, working: `resolve_study_area()` and
   `assemble_evidence_collection()` (harmonized Landsat 5/7/8/9
-  Collection 2 Level 2 SR, QA_PIXEL cloud mask, NBR/SWIR/NDVI reduction,
-  per-sensor continuous year range + seasonal DOY filter via
-  `ee.Filter.calendarRange`, merged + `.toFloat()`-cast + time-sorted),
-  PLUS Sentinel-2 (`COPERNICUS/S2_SR_HARMONIZED` + the standard
-  s2cloudless cloud-probability/shadow-projection recipe — see
-  `docs/findings.md`'s "Legacy-GUI parameter matching + Sentinel-2
-  support" entry). Sentinel-1, MODIS, ALOS/NICFI/Dynamic World still
-  raise `NotImplementedError` if enabled. `day_step_size` is now REAL
+  Collection 2 Level 2 SR, NBR/SWIR/NDVI reduction, per-sensor continuous
+  year range + seasonal DOY filter via `ee.Filter.calendarRange`, merged
+  + `.toFloat()`-cast + time-sorted), PLUS Sentinel-2
+  (`COPERNICUS/S2_SR_HARMONIZED`). **Cloud masking corrected 2026-08-10**
+  against the real `515-gatherCollections27b` source, confirmed wrong for
+  every sensor: L5/L7 and L8/L9 now use two genuinely different QA_PIXEL
+  bit checks (`_mask_landsat_clouds_l5_l7()` = bits 3+4 only;
+  `_mask_landsat_clouds_l8_l9()` = bits 0-4 plus a separate `QA_RADSAT`
+  saturation mask) instead of one shared function; S2 now uses Google
+  Cloud Score+ (`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`, `cs >= 0.60`,
+  confirmed as production's only real live path) instead of the
+  s2cloudless community recipe first implemented — `S2CloudMaskConfig`/
+  `s2_cloud_mask` removed entirely (the legacy config's `s2cloudless`
+  block is vestigial in production's real running code). VALIDATED
+  against real Earth Engine: correct fixes across all three of cell 8C's
+  enabled sensors, but classification moved only ~0.03 percentage
+  points — inert, like most fixes after `dayStepSize` (see
+  `docs/findings.md` "Cloud masking was wrong for every sensor"). Sentinel-1,
+  MODIS, ALOS/NICFI/Dynamic World still raise `NotImplementedError` if
+  enabled. `day_step_size` is now REAL
   (2026-08-10, see `docs/decisions/0008`): its source
   (`afn_gatherCollectionsAndReduce`) confirmed it's a temporal
   binning/aggregation window, not a sampling parameter — production
@@ -490,6 +507,18 @@ useful context that isn't obvious from the field names alone:
   useful for "expose intermediate probability/uncertainty surfaces"
   (Vision doc goal). VERIFIED against real Earth Engine at four real
   test pixels (see `docs/findings.md`).
+  **MAJOR BUG FIXED 2026-08-10** (see
+  `docs/decisions/0009-masking-bugs-resolve-the-classification-gap.md`):
+  `bayes_update()` used to call `.unmask(prior)` immediately, before
+  `_step()`'s `posterior_leveler` dampening ran — so a no-data step's
+  already-restored-to-prior posterior still got pulled partway toward
+  uniform instead of being a true no-op. Confirmed against the real
+  `BULC-Minimal-Module-107` source: production rebalances the masked,
+  valid-pixel-only slice FIRST, then merges onto the untouched prior —
+  rebalance-then-merge, not merge-then-rebalance. Fixed by having
+  `bayes_update()` stay masked and moving the single `.unmask(prior)`
+  call to the end of `_step()`, after `dampen()`/`discount()` (both
+  mask-preserving arithmetic, so correct no-ops on masked steps).
 - `bulcd/engine.py` — NEW, real code: the `afn_BULCD` equivalent, gluing
   `organize_inputs()`'s z-score stream to `bulc.py`'s generic engine via
   binning (`_bin_zscore`) and a transition-matrix lookup
@@ -500,7 +529,22 @@ useful context that isn't obvious from the field names alone:
   `docs/decisions/0006-standard-dataset-masks.md`; verified-partial
   fixes, not complete ones). `run_bulcd()` fails loudly up front (before
   touching `ee.*` at all) if `custom_transition_matrix` isn't
-  configured, or if its row count doesn't match `bin_cuts`. Public
+  configured, or if its row count doesn't match `bin_cuts`.
+  **MAJOR BUG FIXED 2026-08-10** (see
+  `docs/decisions/0009-masking-bugs-resolve-the-classification-gap.md`):
+  `_bin_to_update_factors()`'s `.where()` chain didn't propagate the
+  input bin image's mask, so every masked/no-data day was silently
+  injected into the Bayesian fold as maximum-confidence "decrease"
+  evidence (bin 1's matrix row) instead of a true no-op — confirmed via
+  a full step-by-step trace of cell 8C's Bayesian fold, hand-simulated
+  in Python, which isolated an entire session-long classification
+  discrepancy (7 other confirmed, validated, but largely inert fixes) to
+  this one mask-propagation bug plus the `bulc.py` one above. Fixed by
+  appending `.updateMask(binned_image.mask())` to the return value.
+  VALIDATED against real Earth Engine: both fixes together flipped cell
+  8C's classification from `decrease`-dominant (~82–91%) to
+  `unchanged`-dominant (~83–91%) at all three test points, matching the
+  GUI's expected render for the first time in this investigation. Public
   helper `study_area_mask(config)` returns the combined water+forest
   mask for callers that bypass `run_bulcd()`'s automatic masking (e.g.
   code reading `classification_stack`/`lof_zscore` directly — this must
@@ -547,7 +591,7 @@ useful context that isn't obvious from the field names alone:
   objects directly and therefore need a live, initialized EE session to
   test meaningfully — there's no way to unit-test that arithmetic in pure
   Python without either a live project or a parallel non-EE reference
-  implementation that could drift from the real one. 36 passing tests
+  implementation that could drift from the real one. 35 passing tests
   total across `tests/test_config_loader.py`, `tests/test_inputs.py`,
   `tests/test_engine.py` (no dedicated `test_interpret.py` yet — same
   live-EE-session caveat applies).

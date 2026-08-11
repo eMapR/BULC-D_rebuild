@@ -4,31 +4,52 @@ Modernization of **BULC-D** (Bayesian Updating of Land Cover Detection), a
 probabilistic forest-change-detection algorithm originally built as a
 Google Earth Engine (GEE) JavaScript Code Editor tool.
 
+## Documentation map
+
+This project's context is split across three places, each with a
+different job — start with `CLAUDE.md`, then go deeper as needed:
+
+- **[`CLAUDE.md`](CLAUDE.md)** — stable facts: what the project is, how
+  the legacy system works, what's implemented today, and requirements to
+  hold to. Read this first.
+- **[`docs/decisions/`](docs/decisions/README.md)** — one file per
+  significant "why did we choose X over Y" decision (context / decision
+  / consequences).
+- **[`docs/findings.md`](docs/findings.md)** — a dated, chronological lab
+  notebook of validation runs, experiments, and bugs found — the
+  play-by-play behind the decisions above.
+
 ## Status
 
 Actively in progress (as of 2026-08-10). Config handling and
 continuous-evidence assembly (Landsat 5/7/8/9 + Sentinel-2) are real and
 tested. The Bayesian updating core, expectation-model/z-score layer, and
 BULC-D orchestration are implemented against a credible published
-reconstruction of the legacy math — see "Reference papers" below — since
-the original GEE JavaScript source for that core still hasn't been
-obtained, and are validated against real Earth Engine at several known
-disturbance points (including a real, dated wildfire). Post-run
-"when did this change" analysis (`bulcd/interpret.py`) and real GEE
-asset exports (`bulcd/export.py`) also exist now. See `CLAUDE.md`'s
-"Current code state" for the exact, up-to-date breakdown of what's real
-vs. stubbed vs. unverified.
+reconstruction of the legacy math — see "Reference papers" below — plus,
+for the Bayesian core specifically, confirmed directly against real
+production source (`BULC-Minimal-Module-107`, obtained 2026-08-10). Both
+are validated against real Earth Engine at several known disturbance
+points (including a real, dated wildfire) and against a real legacy GUI
+comparison run. Post-run "when did this change" analysis
+(`bulcd/interpret.py`) and real GEE asset exports (`bulcd/export.py`)
+also exist now. See `CLAUDE.md`'s "Current code state" for the exact,
+up-to-date breakdown of what's real vs. stubbed vs. unverified.
 
-**In progress: matching this rebuild against a real legacy GUI run**
-(cell 8C, see CLAUDE.md "Legacy-GUI parameter matching" / "Real
-production BULC-D parameters"). Reading the GUI's own Console output
-live has already fixed one confirmed gap (unimodal's harmonic regressor
-set) and surfaced the real production transition matrix, but also found
-that production's dampening mechanism is structurally different from
-this rebuild's single-parameter reconstruction (three separate
-"levelers" plus minimum floors, not one scalar) — the comparison run is
-paused pending `BULC-Minimal-Module-107`'s real source rather than
-guessing at that formula.
+**Resolved 2026-08-10: cell 8C GUI-vs-rebuild comparison.** A sustained
+investigation comparing this rebuild's output against a real legacy GUI
+run for one study-area cell (8C) found the rebuild classifying
+`decrease`-dominant where the GUI classified `unchanged`-dominant, despite
+seven confirmed, source-verified parameter/formula fixes along the way
+(production's real three-"leveler" dampening mechanism, `dayStepSize`
+temporal binning, additive modality resolution, corrected z-score/R²
+formulas, per-sensor cloud masking). A full step-by-step trace of the
+Bayesian fold isolated the remaining gap to two Earth Engine
+mask-propagation bugs — no-data steps were silently treated as
+maximum-confidence "decrease" evidence instead of true no-ops. Fixing
+both flipped all three test points to `unchanged`-dominant, matching the
+GUI's expected render. See
+[`docs/decisions/0009`](docs/decisions/0009-masking-bugs-resolve-the-classification-gap.md)
+for the full writeup.
 
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
@@ -112,8 +133,9 @@ reconstruction is an assumption rather than a verified fact.
   missing.
 - `BULCD_Modernization_Vision.docx` — the design brief: goals and
   constraints for the rebuild.
-- `CLAUDE.md` — detailed project context and decisions for AI-assisted
-  development in this repo.
+- `CLAUDE.md` — detailed, stable project context for AI-assisted
+  development in this repo; see "Documentation map" above for how it
+  relates to `docs/decisions/` and `docs/findings.md`.
 
 ## Modernization goals
 

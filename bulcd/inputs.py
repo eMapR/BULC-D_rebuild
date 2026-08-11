@@ -6,20 +6,25 @@ what's still missing" for the full picture; summary:
 REAL, WORKING:
   - `resolve_study_area()` — turns StudyAreaConfig into an ee.Geometry.
   - `assemble_evidence_collection()` — harmonized Landsat 5/7/8/9
-    Collection 2 Level 2 surface reflectance, cloud-masked via
-    QA_PIXEL, reduced to one spectral index (NBR/SWIR/NDVI per
-    config.reduction.band), filtered to each sensor's configured
-    continuous year range + seasonal day-of-year window, merged into
-    one ee.ImageCollection sorted by time. This is the "full archive as
-    continuous evidence" piece of the modernization.
-  - Sentinel-2 (added 2026-08-10): `COPERNICUS/S2_SR_HARMONIZED` joined
-    to `COPERNICUS/S2_CLOUD_PROBABILITY` and masked via the standard
-    community s2cloudless recipe (Google's own tutorial -
-    https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless,
-    referenced by S2CloudMaskConfig's docstring) - cloud-probability
-    threshold + NIR dark-pixel shadow projection, not a novel
-    reconstruction. Same DOY/year-range/reduction-band handling as
-    Landsat via the shared `_reduce_band`/`_date_bounds` helpers.
+    Collection 2 Level 2 surface reflectance, reduced to one spectral
+    index (NBR/SWIR/NDVI per config.reduction.band), filtered to each
+    sensor's configured continuous year range + seasonal day-of-year
+    window, merged into one ee.ImageCollection sorted by time. This is
+    the "full archive as continuous evidence" piece of the
+    modernization. Cloud masking is sensor-specific, CONFIRMED 2026-08-10
+    against the real afn_gatherCollectionsAndReduce source
+    (legacy/515-gatherCollections27b.txt) - L5/L7 and L8/L9 use two
+    genuinely different QA_PIXEL bit checks (see
+    `_mask_landsat_clouds_l5_l7()`/`_mask_landsat_clouds_l8_l9()`'s
+    docstrings), not one shared function like this used to implement.
+  - Sentinel-2 (added 2026-08-10, cloud masking corrected same day):
+    `COPERNICUS/S2_SR_HARMONIZED` linked to Google Cloud Score+
+    (`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`) via `.linkCollection()`
+    - CONFIRMED as production's real, only live cloud-mask path for any
+    usable year (see `_mask_s2_clouds()`'s docstring), replacing an
+    earlier, incorrect implementation of the community s2cloudless
+    recipe. Same DOY/year-range/reduction-band handling as Landsat via
+    the shared `_reduce_band`/`_date_bounds` helpers.
 
 STUBBED, NOT IMPLEMENTED:
   - Sentinel-1, MODIS, ALOS, NICFI, Dynamic World collection assembly
@@ -71,7 +76,6 @@ from bulcd.config.schema import (
     BULCDConfig,
     EvidenceConfig,
     ModalityConfig,
-    S2CloudMaskConfig,
     SensitivityConfig,
     SensorEvidenceConfig,
     StudyAreaConfig,
@@ -101,11 +105,12 @@ _LANDSAT_SR_OFFSET = -0.2
 # when a sensor's config doesn't set first_year.
 _SENSOR_LAUNCH_YEAR = {"L5": 1984, "L7": 1999, "L8": 2013, "L9": 2021, "S2": 2015}
 
-# Sentinel-2 surface reflectance + its companion per-pixel cloud-probability
-# collection (s2cloudless) - see S2CloudMaskConfig's docstring for the
-# tutorial this cloud-masking recipe follows.
+# Sentinel-2 surface reflectance + its companion Cloud Score+ collection -
+# see _mask_s2_clouds()'s docstring: CONFIRMED 2026-08-10 as production's
+# real cloud-masking path, not the s2cloudless recipe this used to use.
 _S2_SR_COLLECTION_ID = "COPERNICUS/S2_SR_HARMONIZED"
-_S2_CLOUD_PROB_COLLECTION_ID = "COPERNICUS/S2_CLOUD_PROBABILITY"
+_S2_CLOUD_SCORE_PLUS_COLLECTION_ID = "GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED"
+_S2_CLOUD_SCORE_CLEAR_THRESHOLD = 0.60  # production's maskLowQA: cs >= 0.60
 _S2_BAND_MAP = {"red": "B4", "nir": "B8", "swir1": "B11", "swir2": "B12"}
 _S2_SR_SCALE = 0.0001  # DN -> reflectance; S2 SR has no additive offset (unlike Landsat C2 L2)
 
@@ -119,17 +124,42 @@ def resolve_study_area(study_area: StudyAreaConfig) -> ee.Geometry:
     return ee.FeatureCollection(study_area.aoi_asset).geometry()
 
 
-def _mask_landsat_clouds(image: ee.Image) -> ee.Image:
-    """Masks cloud/cloud-shadow/dilated-cloud pixels via QA_PIXEL.
+def _mask_landsat_clouds_l5_l7(image: ee.Image) -> ee.Image:
+    """L5/L7 cloud mask via QA_PIXEL: bits 3 (cloud shadow) + 4 (cloud) only.
 
-    Bits 1 (dilated cloud), 3 (cloud), 4 (cloud shadow) - the standard
-    Collection 2 Level 2 QA_PIXEL cloud mask.
+    CONFIRMED 2026-08-10 against the real afn_cloudMaskIC_L5andL7 source
+    (legacy/515-gatherCollections27b.txt) - deliberately does NOT check
+    bit 1 (dilated cloud), unlike L8/L9 below. Production uses two
+    genuinely different cloud-mask functions per sensor pair, not one
+    shared function across all four Landsat sensors like this used to.
     """
     qa = image.select("QA_PIXEL")
-    mask = ee.Image(1)
-    for bit in (1, 3, 4):
-        mask = mask.And(qa.bitwiseAnd(1 << bit).eq(0))
+    mask = qa.bitwiseAnd(1 << 3).eq(0).And(qa.bitwiseAnd(1 << 4).eq(0))
     return image.updateMask(mask)
+
+
+def _mask_landsat_clouds_l8_l9(image: ee.Image) -> ee.Image:
+    """L8/L9 cloud mask via QA_PIXEL bits 0-4 + a separate QA_RADSAT
+    saturation mask.
+
+    CONFIRMED 2026-08-10 against the real maskSrCloudsL8andL9 source
+    (legacy/515-gatherCollections27b.txt): `QA_PIXEL.bitwiseAnd(0b11111).eq(0)`
+    - bits 0 (fill), 1 (dilated cloud), 2 (cirrus), 3 (cloud), 4 (cloud
+    shadow) - AND `QA_RADSAT.eq(0)` (no saturated bands). This used to
+    share a single bits-{1,3,4} function with L5/L7, missing fill/cirrus
+    masking and the saturation mask entirely for L8/L9.
+    """
+    qa_mask = image.select("QA_PIXEL").bitwiseAnd(0b11111).eq(0)
+    saturation_mask = image.select("QA_RADSAT").eq(0)
+    return image.updateMask(qa_mask).updateMask(saturation_mask)
+
+
+_LANDSAT_CLOUD_MASK_FN = {
+    "L5": _mask_landsat_clouds_l5_l7,
+    "L7": _mask_landsat_clouds_l5_l7,
+    "L8": _mask_landsat_clouds_l8_l9,
+    "L9": _mask_landsat_clouds_l8_l9,
+}
 
 
 def _scale_landsat_sr(image: ee.Image) -> ee.Image:
@@ -170,6 +200,7 @@ def _landsat_evidence(
 ) -> ee.ImageCollection:
     start, end = _date_bounds(sensor_code, cfg)
     band_map = _LANDSAT_BAND_MAP[sensor_code]
+    cloud_mask_fn = _LANDSAT_CLOUD_MASK_FN[sensor_code]
 
     collection = (
         ee.ImageCollection(_LANDSAT_COLLECTION_ID[sensor_code])
@@ -180,7 +211,7 @@ def _landsat_evidence(
     )
 
     def _process(image: ee.Image) -> ee.Image:
-        image = _mask_landsat_clouds(image)
+        image = cloud_mask_fn(image)
         image = _scale_landsat_sr(image)
         reduced = _reduce_band(image, band, band_map)
         return reduced.copyProperties(image, image.propertyNames())
@@ -188,63 +219,20 @@ def _landsat_evidence(
     return collection.map(_process)
 
 
-def _s2_with_cloud_probability(
-    study_area: ee.Geometry, start: str, end: str, cloud_cover_threshold: float
-) -> ee.ImageCollection:
-    """Joins S2 SR imagery to its per-pixel cloud-probability companion
-    collection by `system:index` - the standard s2cloudless join pattern."""
-    sr_collection = (
-        ee.ImageCollection(_S2_SR_COLLECTION_ID)
-        .filterBounds(study_area)
-        .filterDate(start, end)
-        .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_cover_threshold))
-    )
-    cloud_prob_collection = (
-        ee.ImageCollection(_S2_CLOUD_PROB_COLLECTION_ID).filterBounds(study_area).filterDate(start, end)
-    )
-    joined = ee.Join.saveFirst("s2cloudless").apply(
-        primary=sr_collection,
-        secondary=cloud_prob_collection,
-        condition=ee.Filter.equals(leftField="system:index", rightField="system:index"),
-    )
-    return ee.ImageCollection(joined)
+def _mask_s2_clouds(image: ee.Image) -> ee.Image:
+    """Cloud mask via Google Cloud Score+ ('cs' band >= 0.60).
 
-
-def _mask_s2_clouds(image: ee.Image, cloud_mask_cfg: S2CloudMaskConfig) -> ee.Image:
-    """Cloud + cloud-shadow mask via s2cloudless probability + a NIR
-    dark-pixel shadow projection - the standard community s2cloudless
-    recipe (see S2CloudMaskConfig's docstring for the tutorial), not a
-    novel reconstruction. Requires `image` to carry the joined
-    's2cloudless' property from `_s2_with_cloud_probability`."""
-    cloud_prob = ee.Image(image.get("s2cloudless")).select("probability")
-    is_cloud = cloud_prob.gt(cloud_mask_cfg.cld_prb_thresh).rename("clouds")
-
-    not_water = image.select("SCL").neq(6)
-    sr_band_scale = 1e4  # unscaled DN range of S2 SR bands, before _scale_s2_sr runs
-    dark_pixels = (
-        image.select("B8")
-        .lt(cloud_mask_cfg.nir_drk_thresh * sr_band_scale)
-        .multiply(not_water)
-        .rename("dark_pixels")
-    )
-    shadow_azimuth = ee.Number(90).subtract(ee.Number(image.get("MEAN_SOLAR_AZIMUTH_ANGLE")))
-    cloud_projection = (
-        is_cloud.directionalDistanceTransform(shadow_azimuth, cloud_mask_cfg.cld_prj_dist * 10)
-        .reproject(crs=image.select(0).projection(), scale=100)
-        .select("distance")
-        .mask()
-        .rename("cloud_transform")
-    )
-    shadows = cloud_projection.multiply(dark_pixels).rename("shadows")
-
-    is_cloud_or_shadow = is_cloud.add(shadows).gt(0)
-    cloud_shadow_mask = (
-        is_cloud_or_shadow.focalMin(2)
-        .focalMax(cloud_mask_cfg.buffer * 2 / 20)
-        .reproject(crs=image.select(0).projection(), scale=20)
-        .rename("cloudmask")
-    )
-    return image.updateMask(cloud_shadow_mask.Not())
+    CONFIRMED 2026-08-10 against the real afn_gatherCollectionsAndReduce
+    source (legacy/515-gatherCollections27b.txt, `maskLowQA`) - production
+    does NOT use the s2cloudless community recipe this used to implement
+    (cloud-probability join + NIR dark-pixel shadow projection). Cloud
+    Score+ (`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`) has been the only
+    live path for any year >= 2015 since an Oct 2024 update noted in that
+    source ("cloudscore now used for 2015+; they updated their
+    holdings") - covers every year this rebuild's configs use. Requires
+    `image` to carry the linked Cloud Score+ bands (see `_s2_evidence()`).
+    """
+    return image.updateMask(image.select("cs").gte(_S2_CLOUD_SCORE_CLEAR_THRESHOLD))
 
 
 def _scale_s2_sr(image: ee.Image) -> ee.Image:
@@ -255,14 +243,22 @@ def _scale_s2_sr(image: ee.Image) -> ee.Image:
 
 def _s2_evidence(cfg: SensorEvidenceConfig, study_area: ee.Geometry, band: str) -> ee.ImageCollection:
     start, end = _date_bounds("S2", cfg)
-    cloud_mask_cfg = cfg.s2_cloud_mask or S2CloudMaskConfig()
 
-    collection = _s2_with_cloud_probability(study_area, start, end, cfg.cloud_cover_threshold).filter(
-        ee.Filter.calendarRange(cfg.first_doy, cfg.last_doy, "day_of_year")
+    sr_collection = (
+        ee.ImageCollection(_S2_SR_COLLECTION_ID)
+        .filterBounds(study_area)
+        .filterDate(start, end)
+        .filter(ee.Filter.calendarRange(cfg.first_doy, cfg.last_doy, "day_of_year"))
+        .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cfg.cloud_cover_threshold))
     )
+    # .linkCollection() matches production's own real code
+    # (linkedS2AndCloudScorePlusIC) exactly - joins each SR image to its
+    # Cloud Score+ companion by system:index under the hood.
+    cloud_score = ee.ImageCollection(_S2_CLOUD_SCORE_PLUS_COLLECTION_ID)
+    collection = sr_collection.linkCollection(cloud_score, cloud_score.first().bandNames())
 
     def _process(image: ee.Image) -> ee.Image:
-        image = _mask_s2_clouds(image, cloud_mask_cfg)
+        image = _mask_s2_clouds(image)
         image = _scale_s2_sr(image)
         reduced = _reduce_band(image, band, _S2_BAND_MAP)
         return reduced.copyProperties(image, image.propertyNames())

@@ -50,11 +50,9 @@ evidence:
       first_doy: 1
       last_doy: 365
       cloud_cover_threshold: 70
-      s2_cloud_mask:
-        cld_prb_thresh: 50
-        nir_drk_thresh: 0.15
-        cld_prj_dist: 3
-        buffer: 50
+      # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
+      # (a single hardcoded 0.60 threshold, not per-run configurable).
+      # See bulcd/inputs.py's _mask_s2_clouds().
     S1:
       enabled: false
       first_year: 2015

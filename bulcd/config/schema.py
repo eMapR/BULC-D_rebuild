@@ -118,24 +118,6 @@ class StudyAreaConfig:
 
 
 @dataclass
-class S2CloudMaskConfig:
-    """Legacy Sentinel-2 `s2cloudless` block (BULCD-InputParameters-v5).
-
-    Uses the community s2cloudless method:
-    https://developers.google.com/earth-engine/tutorials/community/sentinel-2-s2cloudless
-
-    The legacy dict repeats `CloudCoverThreshold` here (identical value to
-    the sensor-level one) — consolidated to the single
-    `SensorEvidenceConfig.cloud_cover_threshold` field instead of duplicating it.
-    """
-
-    cld_prb_thresh: float = 50.0  # cloud probability (%) above which a pixel is "cloud"
-    nir_drk_thresh: float = 0.15  # NIR reflectance below which a pixel is potential cloud shadow
-    cld_prj_dist: float = 3.0  # max distance (km) to search for cloud shadows from cloud edges
-    buffer: float = 50.0  # distance (m) to dilate cloud-identified objects
-
-
-@dataclass
 class SensorEvidenceConfig:
     """One sensor's contribution to the continuous evidence stream.
 
@@ -156,7 +138,13 @@ class SensorEvidenceConfig:
     last_doy: int = 365  # seasonal window end, applied every year (legacy lastDOY)
     cloud_cover_threshold: float = 20.0  # legacy CloudCoverThreshold
     sar_polarization: SARPolarization | None = None  # S1/AL only; legacy SARValueToTrack
-    s2_cloud_mask: S2CloudMaskConfig | None = None  # S2 only
+    # No s2_cloud_mask field - the legacy s2cloudless dictionary
+    # (BULCD-InputParameters-v5) is vestigial in production's real,
+    # currently-running code. CONFIRMED 2026-08-10
+    # (legacy/515-gatherCollections27b.txt): the only live S2 cloud-mask
+    # path for any usable year is Google Cloud Score+ (a single hardcoded
+    # 0.60 threshold, no per-run configuration) - see
+    # bulcd/inputs.py's `_mask_s2_clouds()`.
 
 
 @dataclass

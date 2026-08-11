@@ -117,18 +117,18 @@ def bayes_update(prior: ee.Image, update_factors: ee.Image) -> ee.Image:
 
     posterior_c = update_factors_c * prior_c / sum_c(update_factors_c * prior_c)
 
-    Missing data (update_factors masked at a pixel, e.g. cloud/no coverage
-    at that timestep) leaves that pixel's prior probabilities unchanged -
-    the paper's explicit rule (section 3.1/4.5), not a fallback hack.
-    `.unmask(prior)` implements this directly: wherever the computed
-    posterior is masked (because update_factors was masked there), the
-    corresponding prior pixel value fills it in - exact per Eq. 2's silence
-    on missing Events.
+    Stays masked wherever `update_factors` is masked (e.g. cloud/no coverage
+    at that timestep) - does NOT unmask back to `prior` itself. That merge
+    is the caller's responsibility, done AFTER any per-step rebalancing
+    (posterior_leveler/discount()), not immediately here - see run_bulc()'s
+    _step() docstring for why the order matters (a real bug, fixed
+    2026-08-10: applying posterior_leveler after an early unmask() was
+    dampening no-data steps toward uniform instead of leaving them as a
+    true no-op).
     """
     weighted = prior.multiply(update_factors)
     total = weighted.reduce(ee.Reducer.sum())
-    posterior = weighted.divide(total)
-    return posterior.unmask(prior)
+    return weighted.divide(total)
 
 
 def discount(probabilities: ee.Image, recency_factor: float) -> ee.Image:
@@ -201,8 +201,23 @@ def run_bulc(
         source_image = ee.Image(image)
         dampened = dampen(source_image, dampening_factor)
         posterior = bayes_update(prior, dampened)
+        # BUG FIXED 2026-08-10: posterior_leveler/discount() used to run
+        # AFTER bayes_update() had already unmasked no-data steps back to
+        # `prior`, so a no-data step got pulled toward uniform by
+        # posterior_leveler on values that should have been a total no-op.
+        # Confirmed against the real BULC-Minimal-Module-107 source
+        # (legacy/BULC-Minimal-Module-107.txt lines 590-600):
+        # afn_dayIRebalancingV3 (posterior_leveler) is applied ONLY to the
+        # masked, valid-pixel-only posterior; the result is then merged
+        # onto the untouched prior via `.where(oneEventValidValues, ...)` -
+        # i.e. rebalance-then-merge, not merge-then-rebalance. `posterior`
+        # stays masked here wherever `dampened`/`source_image` was masked,
+        # so dampen()/discount() (both mask-preserving arithmetic) are
+        # correctly no-ops there, and `.unmask(prior)` at the end performs
+        # the same merge production does.
         posterior = dampen(posterior, posterior_leveler)
         posterior = discount(posterior, recency_factor)
+        posterior = posterior.unmask(prior)
         classification = _argmax_label(posterior)
 
         # Carry the source Event's date onto both outputs - neither is

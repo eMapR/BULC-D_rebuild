@@ -119,14 +119,11 @@ evidence:
       first_doy: 74
       last_doy: 288
       cloud_cover_threshold: 70
-      # s2_cloud_mask sub-params not specified by the user - left at the
-      # legacy example file's defaults (BULCD-InputParameters-v5). S2
-      # evidence assembly is implemented (bulcd/inputs.py, 2026-08-10).
-      s2_cloud_mask:
-        cld_prb_thresh: 50
-        nir_drk_thresh: 0.15
-        cld_prj_dist: 3
-        buffer: 50
+      # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
+      # (a single hardcoded 0.60 threshold), CONFIRMED 2026-08-10 as
+      # production's real, only live S2 cloud-mask path - replaced an
+      # earlier, incorrect s2cloudless implementation. See
+      # bulcd/inputs.py's _mask_s2_clouds().
     L5:
       enabled: false
     S1:

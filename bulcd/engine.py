@@ -68,7 +68,30 @@ def _bin_to_update_factors(
     """Looks up each pixel's bin against transition_matrix's rows, producing
     the 3-band per-timestep update-factor image bulc.py consumes. Bins are a
     small fixed discrete set (1..10), so a chained .where() per class column
-    is the simplest correct implementation - no need for a general lookup."""
+    is the simplest correct implementation - no need for a general lookup.
+
+    MAJOR BUG FIXED 2026-08-10: `band` starts as a fully-valid
+    `ee.Image.constant(...)` (bin 1's value), and `.where(cond, value)`
+    silently falls back to that starting value wherever `cond`
+    (`binned_image.eq(bin_number)`) is masked - it does NOT propagate
+    `binned_image`'s own mask through the chain. CONFIRMED via direct
+    testing: a masked z-score/bin (no satellite data that day) produced
+    update_factors of `[0.83, 0.08, 0.08]` - bin 1's row, the single most
+    extreme "decrease" value in the entire matrix - instead of staying
+    masked. Every masked/no-data step was silently injected into
+    `bulc.run_bulc()`'s sequential fold as maximum-confidence "decrease"
+    evidence rather than the intended no-op. This was found to be the
+    dominant, previously-undetected explanation for cell 8C's persistent
+    "decrease"-heavy classification despite seven other confirmed,
+    validated fixes (posterior_leveler, initializing_leveler, z-score
+    formula, dayStepSize, modality, R2, cloud masking) - a hand-traced
+    Python simulation of the real per-pixel bin sequence, correctly
+    treating masked steps as no-ops, produced `unchanged`-dominant
+    results matching the evidence and the GUI's render; only forcing the
+    real (buggy) mask-defaulting behavior reproduced the observed
+    `decrease`-dominant discrepancy. The `.updateMask()` call below
+    forces the output to actually respect `binned_image`'s mask.
+    """
     n_bins = len(transition_matrix)
     n_classes = len(transition_matrix[0])
 
@@ -81,7 +104,7 @@ def _bin_to_update_factors(
             )
         class_images.append(band.rename(_DECISION_CLASS_NAMES[class_index]))
 
-    return ee.Image.cat(class_images)
+    return ee.Image.cat(class_images).updateMask(binned_image.mask())
 
 
 def _water_mask(region: ee.Geometry) -> ee.Image:

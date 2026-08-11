@@ -21,7 +21,6 @@ from bulcd.config.schema import (
     ExportConfig,
     ModalityConfig,
     ReductionConfig,
-    S2CloudMaskConfig,
     SensitivityConfig,
     SensorEvidenceConfig,
     StudyAreaConfig,
@@ -195,20 +194,6 @@ def _build_sensor_evidence(entry: dict[str, Any], code: str) -> SensorEvidenceCo
                 f"{sorted(_VALID_SAR_POLARIZATIONS)}"
             )
 
-    s2_cloud_mask_section = entry.get("s2_cloud_mask")
-    if s2_cloud_mask_section is not None and code != "S2":
-        raise ConfigError(f"evidence.sensors.{code}.s2_cloud_mask is only valid for S2")
-    s2_cloud_mask = (
-        S2CloudMaskConfig(
-            cld_prb_thresh=s2_cloud_mask_section.get("cld_prb_thresh", 50.0),
-            nir_drk_thresh=s2_cloud_mask_section.get("nir_drk_thresh", 0.15),
-            cld_prj_dist=s2_cloud_mask_section.get("cld_prj_dist", 3.0),
-            buffer=s2_cloud_mask_section.get("buffer", 50.0),
-        )
-        if s2_cloud_mask_section is not None
-        else None
-    )
-
     return SensorEvidenceConfig(
         enabled=entry.get("enabled", False),
         first_year=entry.get("first_year"),
@@ -217,7 +202,6 @@ def _build_sensor_evidence(entry: dict[str, Any], code: str) -> SensorEvidenceCo
         last_doy=entry.get("last_doy", 365),
         cloud_cover_threshold=entry.get("cloud_cover_threshold", 20.0),
         sar_polarization=sar_polarization,
-        s2_cloud_mask=s2_cloud_mask,
     )
 
 
