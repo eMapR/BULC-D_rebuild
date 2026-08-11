@@ -434,16 +434,19 @@ useful context that isn't obvious from the field names alone:
   expectation/target split is real in production, and this rebuild's
   continuous full-stream scoring is a deliberate, confirmed divergence
   (see `docs/decisions/0003`), not a gap to close. Modality-priority
-  resolution CONFIRMED WRONG, not yet fixed: the real source
-  (`502.7-1h5-HarmonicFunctions`, fetched 2026-08-10) shows production is
-  ADDITIVE (every true `ModalityConfig` flag's terms concatenate), not
-  "richest shape wins" like `_select_modality_regressors()` currently
-  implements — doesn't affect cell 8C's numbers (only `unimodal` is
-  relevant there) but is a real bug for multi-flag configs, queued as a
-  follow-up. R2's exact formula also CONFIRMED DIFFERENT (production
-  computes adjusted R2, dof-corrected; this rebuild computes plain
-  `1 - SS_res/SS_tot`) — diagnostic-only, doesn't feed the Bayesian
-  engine, lower priority. Fits a harmonic regression per pixel over a
+  resolution FIXED (2026-08-10): the real source
+  (`502.7-1h5-HarmonicFunctions`) confirmed production is ADDITIVE (every
+  true `ModalityConfig` flag's terms concatenate), not "richest shape
+  wins" as `_select_modality_regressors()` previously implemented — now
+  matches. R2 also FIXED to the confirmed adjusted formula
+  (dof-corrected residual variance over sample variance of y, reusing
+  the regression reducer's own `residuals` output directly). VALIDATED
+  against real Earth Engine: both fixes left cell 8C's classification
+  identical to the decimal (R2 is diagnostic-only and never feeds the
+  Bayesian engine; cell 8C's config only ever exercises the
+  unimodal-alone regressor path regardless) — real, correct fixes,
+  confirmed classification-inert for this specific config. Fits a
+  harmonic regression per pixel over a
   configurable global baseline window (`ee.Reducer.linearRegression`,
   continuous fractional-year time axis rather than day-of-year, so
   multi-year baselines don't wrap around at year boundaries), then

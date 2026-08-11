@@ -39,18 +39,20 @@ PARTIAL, PARTLY CONFIRMED AGAINST THE REAL SOURCE:
     not something to reconcile against source. Its real implementation
     lives in `6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`
     (`alemlakes/r-2903-Dev`), fetched 2026-08-10
-    (see docs/findings.md "organizeBULCD_Inputs obtained"). Two formulas
-    are now CONFIRMED against it, not reconstructed: `_zscore_image()`'s
-    denominator is `max(residual_stddev, denominator_factor)` clamped to
-    `[-10, 10]` (not an additive epsilon), and `_fit_expectation_model()`'s
+    (see docs/findings.md "organizeBULCD_Inputs obtained"). Several
+    formulas are now CONFIRMED against it and the harmonic-functions
+    module it delegates to (`502.7-1h5-HarmonicFunctions`, fetched
+    2026-08-10), not reconstructed: `_zscore_image()`'s denominator is
+    `max(residual_stddev, denominator_factor)` clamped to `[-10, 10]`
+    (not an additive epsilon); `_fit_expectation_model()`'s
     `residual_stddev` is a plain sample standard deviation (`n-1`) of the
     observed-minus-fitted residuals, not a regression residual-standard-error
-    (`n - num_regressors`). Still NOT confirmed: modality-priority
-    resolution when multiple `ModalityConfig` flags are true (the source
-    calls out to a still-missing harmonic-functions module for this), and
-    R2's exact formula (also delegated to that missing module) - both
-    still flagged inline as documented assumptions against Cardille &
-    Fortin 2016 / Willis 2022 (see CLAUDE.md "Reference papers").
+    (`n - num_regressors`); R2 is the ADJUSTED formula (dof-corrected
+    residual variance over sample variance of the observed values), not a
+    plain `1 - SS_res/SS_tot`; and `_select_modality_regressors()`'s
+    resolution is ADDITIVE (every true `ModalityConfig` flag's terms
+    concatenate), not "richest shape wins" as this module assumed until
+    2026-08-10.
 
 Assumes `ee.Initialize(...)` has already been called by the caller —
 this module never calls it itself, so it has no opinion about which
@@ -458,38 +460,38 @@ class OrganizedInputs:
 
 
 def _select_modality_regressors(modality: ModalityConfig) -> list[str]:
-    """Resolves ModalityConfig's (possibly multiple) true flags to one
+    """Resolves ModalityConfig's (possibly multiple) true flags to a
     concrete list of harmonic regressor band names (see _add_harmonic_terms).
 
-    ASSUMPTION pending real organizeBULCD_Inputs source confirmation: the
-    one real legacy example (BULCD-InputParameters-v5) sets both `constant`
-    and `unimodal` true simultaneously, and ModalityConfig's own docstring
-    already flags this as unresolved. Here: richest enabled shape wins,
-    in order trimodal > bimodal > unimodal > linear > constant.
+    CONFIRMED 2026-08-10 against the real
+    afn_determineHarmonicIndependentsViaModalityDictionary source
+    (502.7-1h5-HarmonicFunctions, legacy/502.7-1h5-HarmonicFunctions.txt) -
+    resolution is ADDITIVE, not "richest shape wins" like this function
+    previously assumed:
+        if (vm.constant) { var harmonicList = ee.List(['constant']) }
+        if (vm.linear) { harmonicList = harmonicList.add('t') }
+        if (vm.unimodal) { harmonicList = harmonicList.add('cos').add('sin') }
+        if (vm.bimodal) { harmonicList = harmonicList.add('cos2').add('sin2') }
+        if (vm.trimodal) { harmonicList = harmonicList.add('cos3').add('sin3') }
+    Every true flag's terms concatenate onto the list. Production's own
+    literal logic only initializes the list inside `if (vm.constant)` -
+    `constant=false` would crash there (`.add()` on undefined) - and every
+    real confirmed run has `constant=true` regardless of which other flags
+    are set (see CLAUDE.md "Legacy-GUI parameter matching"). Reproduced
+    here as "constant always included" rather than replicating the crash -
+    a regression needs an intercept term regardless of what
+    `modality.constant` itself is set to.
     """
-    if modality.trimodal:
-        # bimodal/trimodal's own first-order term is still "sin" only, no
-        # "cos" - unlike unimodal below, that's NOT yet confirmed against
-        # a real production run (only unimodal's regressor list has been
-        # observed live, see CLAUDE.md "Legacy-GUI parameter matching").
-        # Plausibly the same gap, left alone until actually confirmed.
-        return ["constant", "sin", "cos2", "sin2", "cos3", "sin3"]
-    if modality.bimodal:
-        return ["constant", "sin", "cos2", "sin2"]
-    if modality.unimodal:
-        # CONFIRMED 2026-08-10 against a real GUI run's Console output
-        # (cell 8C - see CLAUDE.md "Legacy-GUI parameter matching"):
-        # production's own printed `harrrmonic names (Optical)` was
-        # ["constant","cos","sin"] - the full first-order harmonic, NOT
-        # Willis (2022) eq. 6's simplified constant+sin-only fit this
-        # used to implement. Live evidence overrides the thesis here.
-        return ["constant", "cos", "sin"]
+    regressors = ["constant"]
     if modality.linear:
-        return ["constant", "t"]
-    # Fallback regardless of modality.constant's own value - a regression
-    # needs at least an intercept term, so "no seasonal shape selected"
-    # and "constant explicitly selected" resolve to the same regressor set.
-    return ["constant"]
+        regressors.append("t")
+    if modality.unimodal:
+        regressors += ["cos", "sin"]
+    if modality.bimodal:
+        regressors += ["cos2", "sin2"]
+    if modality.trimodal:
+        regressors += ["cos3", "sin3"]
+    return regressors
 
 
 def _add_harmonic_terms(image: ee.Image) -> ee.Image:
@@ -573,24 +575,25 @@ def _fit_expectation_model(
         residuals.select("residual").reduce(ee.Reducer.sampleStdDev()).rename("residual_stddev")
     )
 
-    def _squared_residual(image: ee.Image) -> ee.Image:
-        return (
-            image.select(band)
-            .subtract(image.select("fitted"))
-            .pow(2)
-            .rename("squared_residual")
-        )
-
-    ss_res = fitted_expectation.map(_squared_residual).reduce(ee.Reducer.sum()).rename("ss_res")
-
-    observed_mean = expectation_collection.select(band).reduce(ee.Reducer.mean())
-    ss_tot = (
-        expectation_collection.select(band)
-        .map(lambda img: img.subtract(observed_mean).pow(2).rename("squared_deviation"))
-        .reduce(ee.Reducer.sum())
-        .rename("ss_tot")
-    )
-    r2 = ee.Image(1).subtract(ss_res.divide(ss_tot)).rename("r2")
+    # CONFIRMED 2026-08-10 against the real afn_getRMSEandR2 source
+    # (502.7-1h5-HarmonicFunctions, legacy/502.7-1h5-HarmonicFunctions.txt):
+    # production computes ADJUSTED R2 (dof-corrected residual variance over
+    # the sample variance of the observed values), not this project's
+    # previous plain `1 - SS_res/SS_tot`:
+    #   dof = n - num_regressors
+    #   rmsr = linearRegression reducer's own 'residuals' output (RMS of
+    #     residuals per Y-variable - reused directly here instead of
+    #     manually re-deriving it from per-image squared residuals)
+    #   sSquared = (rmsr^2 * n) / dof
+    #   yVariance = sampleVariance(observed)
+    #   r2 = 1 - sSquared / yVariance
+    n = expectation_collection.select(band).count()
+    dof = n.subtract(len(regressor_names))
+    rmsr = regression.select("residuals").arrayProject([0]).arrayFlatten([["rmsr"]])
+    ss_res = rmsr.pow(2).multiply(n)
+    s_squared = ss_res.divide(dof)
+    y_variance = expectation_collection.select(band).reduce(ee.Reducer.sampleVariance())
+    r2 = ee.Image(1).subtract(s_squared.divide(y_variance)).rename("r2")
 
     return ExpectationFit(
         coefficients=coefficients,

@@ -136,11 +136,16 @@ reduction:
   band: nbr  # "Value to track: NBR" - matches Willis (2022)'s NBR12 transition matrix
 
 modality:
-  # User's actual GUI selection: unimodal ONLY - not constant+unimodal
-  # together (which was the GUI's own out-of-the-box default found
-  # earlier by reading guiBULCD.rtf; this run deliberately chose
-  # differently).
-  constant: false
+  # CORRECTED 2026-08-10: the actual confirmed BULCargumentDictionaryPlus
+  # Console dump from this exact cell 8C run showed constant:true AND
+  # unimodal:true together - `constant: false` here was a transcription
+  # error on the assistant's part from an earlier verbal parameter list,
+  # not what the real run used. Also required for correctness:
+  # afn_determineHarmonicIndependentsViaModalityDictionary's real source
+  # (legacy/502.7-1h5-HarmonicFunctions.txt) only initializes its
+  # regressor list inside `if (vm.constant)` - constant=false would be
+  # a crash in production, not a valid alternate configuration.
+  constant: true
   unimodal: true
   linear: false
   bimodal: false

@@ -965,9 +965,11 @@ Same session, two more files fetched: `502.7-1h5-HarmonicFunctions`
 (`CommonCode2:/502.7-Harmonics/502.7-1h5-HarmonicFunctions`) and
 `6002.C2-BULCD-Module-analyzeOutputs` (the real `afn_interpretBULCDResult`,
 `r-2902-Dev` - a different repo than the `r-2903-Dev` files fetched
-earlier). **Not yet implemented** - findings recorded here, fixes queued
-as a follow-up batch per user's explicit sequencing choice (dayStepSize
-first, these after).
+earlier). Per user's explicit sequencing choice (dayStepSize first, these
+after), the modality/R2/config-transcription fixes below were implemented
+and validated later the same session - see "Modality/R2 fixes
+implemented" at the end of this entry. `interpret.py`'s redesign remains
+unimplemented, a separate follow-up.
 
 **Modality-priority resolution: our "richest shape wins" assumption was
 wrong.** Real `afn_determineHarmonicIndependentsViaModalityDictionary`:
@@ -1009,6 +1011,32 @@ sample variance of y), not this rebuild's plain `1 - SS_res/SS_tot`. R2
 is diagnostic-only (doesn't feed the Bayesian engine itself), so lower
 priority than the z-score fixes already made, but a real, now-fixable
 discrepancy.
+
+**Modality/R2 fixes implemented (2026-08-10, later same session).**
+`_select_modality_regressors()` rewritten to be additive (`constant`
+always included as the base - production would crash without it, and
+every real confirmed run has it true anyway - then `t`/`cos+sin`/
+`cos2+sin2`/`cos3+sin3` appended per whichever flags are true, in
+production's own order). `_fit_expectation_model()`'s R2 rewritten to
+the confirmed adjusted formula, reusing the `linearRegression` reducer's
+own `residuals` output (RMS residual) directly instead of manually
+re-deriving sum-of-squared-residuals - a simplification as well as a
+fix. `configs/cell_8c_comparison.yaml`'s `modality.constant` corrected
+from `false` to `true`. 2 tests updated (`test_select_modality_regressors_*`),
+36 total, all pass.
+
+**VALIDATED against real Earth Engine, same three points as every check
+in this thread: numbers came back IDENTICAL to the decimal to the
+post-dayStepSize-fix values.** Exactly as predicted before implementing -
+R2 never feeds the Bayesian engine at all, and cell 8C's config only
+ever exercises the unimodal-alone regressor path regardless of whether
+`constant` is separately true (the old "richest wins" logic already
+hardcoded `"constant"` into the unimodal branch). Real, confirmed bugs,
+correctly fixed, but classification-inert for this specific config -
+useful confirmation that the remaining GUI-vs-rebuild gap sits elsewhere
+(most likely still-missing pieces like `BULCD-AnalysisParameters-v5` or
+the cloud-masking module, or simply normal pixel-level variance between
+two now-much-more-similar but not bit-identical implementations).
 
 **`interpret.py`'s `year_of_change()` may have the wrong definition
 entirely.** Real `afn_interpretBULCDResult`'s timing logic:

@@ -45,16 +45,22 @@ def test_date_bounds_explicit_range():
     assert end == "2022-01-01"
 
 
-def test_select_modality_regressors_richest_enabled_shape_wins():
+def test_select_modality_regressors_multiple_flags_are_additive():
+    # CONFIRMED 2026-08-10 against the real
+    # afn_determineHarmonicIndependentsViaModalityDictionary source
+    # (legacy/502.7-1h5-HarmonicFunctions.txt): every true flag's terms
+    # concatenate onto the list - NOT "richest shape wins," this
+    # function's earlier, incorrect assumption. unimodal+trimodal true
+    # together yields BOTH sets of terms, not just trimodal's.
     modality = ModalityConfig(constant=True, unimodal=True, trimodal=True)
     assert _select_modality_regressors(modality) == [
-        "constant", "sin", "cos2", "sin2", "cos3", "sin3"
+        "constant", "cos", "sin", "cos3", "sin3"
     ]
 
 
 def test_select_modality_regressors_bimodal():
     modality = ModalityConfig(bimodal=True)
-    assert _select_modality_regressors(modality) == ["constant", "sin", "cos2", "sin2"]
+    assert _select_modality_regressors(modality) == ["constant", "cos2", "sin2"]
 
 
 def test_select_modality_regressors_unimodal_uses_full_first_order_harmonic():
