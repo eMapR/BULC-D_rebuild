@@ -11,18 +11,21 @@ engine.py started threading system:time_start through - an older
 classification_stack won't work here) to find, per pixel, the calendar
 year its classification persistently flipped to "decrease."
 
-IMPORTANT CAVEAT validated 2026-07-30 against the known 2003 B&B Complex
-Fire point: at recency_factor=1.0 (the classic-method default, off), the
-detected change year can lag the true disturbance by OVER A DECADE (2015
-detected vs. 2003 actual) - the running Bayesian argmax classification
-takes that long to flip even though the underlying z-score jumped
-immediately. Lowering recency_factor pulls the detected year closer to
-the truth (0.99->2009, 0.98->2007, 0.95->2006 at that same test point)
-but didn't reach the true year even at 0.95. This script exposes
-recency_factor as a parameter rather than hardcoding it - there's no
-known value that eliminates the lag, only reduces it. See CLAUDE.md
-"Year of change" for the full sweep and discussion before trusting a
-specific year's map at face value.
+IMPORTANT CAVEAT (from before docs/decisions/0010's expectation/target
+split restoration): the original multi-decade-lag finding below assumed
+a long CONTINUOUS evidence stream (docs/decisions/0003, now superseded) -
+at recency_factor=1.0, the detected change year lagged the true
+disturbance by OVER A DECADE (2015 detected vs. 2003 actual) because the
+running classification took that long to flip across many "confirm
+normal" Events. With the expectation/target split restored, the target
+period is typically short (a single season), so `classification_stack`
+now has far fewer Events - `year_of_change()`'s "persistent run through
+the end of the stack" logic is largely degenerate over that short a
+stack (see bulcd/interpret.py's module docstring - its semantics haven't
+been reconsidered for the restored short-target-period shape yet, an
+explicitly open follow-up from docs/decisions/0010). Treat this script's
+output as unvalidated until that follow-up lands, not as a repeat of the
+original lag finding.
 
 AOI source: same grid-cell lookup as debug_grid_cell_map.py
 (`projects/eastern-cascades-bugnet/assets/clipped_grid_35000m`, filtered
@@ -49,6 +52,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     ReductionConfig,
     SensitivityConfig,
@@ -89,29 +93,38 @@ NBR12_TRANSITION_MATRIX = [
     [0.02, 0.02, 0.08],
 ]
 
+_TARGET_SENSOR = "L5" if TARGET_YEAR < 2014 else "L8"
+
 config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=AOI),  # mask_water defaults True
+    # Restored expectation/target period split (docs/decisions/0010):
+    # expectation = the same 2000-2003 baseline as debug_grid_cell_map.py;
+    # target = the single queried YEAR (see interpret.py caveat above).
     evidence=EvidenceConfig(
-        sensors={
-            "L5": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2000,
-                last_year=2012,
-                first_doy=152,  # June 1
-                last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
-                cloud_cover_threshold=40,
-            ),
-            "L8": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2014,
-                last_year=2024,
-                first_doy=152,  # June 1
-                last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
-                cloud_cover_threshold=40,
-            ),
-        },
-        expectation_first_year=2000,
-        expectation_last_year=2003,
+        expectation=EvidencePeriodConfig(
+            sensors={
+                "L5": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2000,
+                    last_year=2003,
+                    first_doy=152,  # June 1
+                    last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
+        target=EvidencePeriodConfig(
+            sensors={
+                _TARGET_SENSOR: SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=TARGET_YEAR,
+                    last_year=TARGET_YEAR + 1,
+                    first_doy=152,  # June 1
+                    last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
     ),
     reduction=ReductionConfig(band="nbr"),
     modality=ModalityConfig(constant=True, unimodal=True),

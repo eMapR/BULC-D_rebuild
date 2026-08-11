@@ -14,6 +14,7 @@ on, and `../../CLAUDE.md` for current stable project state.
 - [0007 — Posterior-Leveler Regularization: A Confirmed Missing Piece of the Real Method](0007-posterior-leveler-regularization.md)
 - [0008 — `dayStepSize` Is a Temporal Binning Window, Not a Sampling Parameter](0008-day-step-size-temporal-binning.md)
 - [0009 — Two Mask-Propagation Bugs Were the Real Cause of Cell 8C's Classification Gap](0009-masking-bugs-resolve-the-classification-gap.md)
+- [0010 — Restore the Expectation/Target Period Split for GUI Structural Parity](0010-restore-expectation-target-split-for-gui-parity.md)
 
 New decisions get the next number, `000N-short-title.md`, using the same
 Context/Decision/Consequences shape.

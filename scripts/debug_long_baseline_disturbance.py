@@ -1,23 +1,27 @@
-"""Debug run demonstrating a major finding: a long, stable pre-disturbance
-baseline can make a genuine later disturbance nearly undetectable at the
-default dampening_factor. See CLAUDE.md "Major finding: long stable
-baselines can mask real disturbance" for full context - this is not a
-bug, it's a real structural property of sequential Bayesian updating
-(Cardille & Fortin 2016 Eq. 2) that's directly in tension with this
-project's "use the full Landsat archive as continuous evidence" goal.
+"""Debug run originally demonstrating a major finding: a long, stable
+pre-disturbance baseline can make a genuine later disturbance nearly
+undetectable at the default dampening_factor. See CLAUDE.md "Major
+finding: long stable baselines can mask real disturbance" for full
+context - a real structural property of sequential Bayesian updating
+over an indefinite CONTINUOUS evidence stream (Cardille & Fortin 2016
+Eq. 2), which was this project's design at the time (docs/decisions/0003).
+
+STRUCTURALLY MOOT AS OF docs/decisions/0010 (2026-08-11): with the
+expectation/target period split restored, a run only ever folds through
+the target period's short Event sequence, not 14+ years of intervening
+"confirm normal" evidence - the specific compounding failure mode this
+script existed to demonstrate mostly can't occur anymore for a
+reasonably short target window. Adapted below to instead directly test
+"does a one-shot baseline-vs-target comparison spanning the known 2015
+disturbance detect it" - a more direct question under the restored
+design, and a genuinely different test than what this script used to run.
+The dampening/recency_factor sweeps below are kept since they're still
+meaningful knobs, just no longer motivated by the original long-stream
+failure case.
 
 Point (user-supplied, picked via LandTrendr for a high-magnitude
-disturbance): -122.0582, 44.4823, central Oregon Cascades. Z-scores sit
-near zero for 14 years (2000-2014), then crash to -6.9 in June 2015 and
-stay between -5 and -10.9 for the following 9 years - about as
-unambiguous a disturbance signal as this pipeline will ever see. Despite
-that, at dampening_factor=0.5 the final classification is
-unchanged=0.9999999999994. This script prints the full z-score time
-series, a dampening-factor sweep showing dampening alone doesn't fix it
-even at d=0.02, and a recency_factor sweep showing bulc.py's discount()
-(CLAUDE.md "Recency weighting") DOES fix it at recency_factor=0.98 -
-without breaking the other three validated test pixels (see CLAUDE.md
-for that comparison).
+disturbance): -122.0582, 44.4823, central Oregon Cascades. Z-scores
+crashed to -6.9 in June 2015 in the original continuous-stream run.
 
 Usage:
     conda run -n bulcd python scripts/debug_long_baseline_disturbance.py
@@ -34,6 +38,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     ReductionConfig,
     SensitivityConfig,
@@ -71,27 +76,35 @@ NBR12_TRANSITION_MATRIX = [
 def make_config(dampening_factor: float, recency_factor: float = 1.0) -> BULCDConfig:
     return BULCDConfig(
         study_area=StudyAreaConfig(aoi_coordinates=SMALL_AOI),
+        # Restored expectation/target period split (docs/decisions/0010):
+        # expectation = pre-disturbance baseline (L5, 2000-2003); target =
+        # the first full growing season spanning the known June 2015
+        # disturbance onset (L8).
         evidence=EvidenceConfig(
-            sensors={
-                "L5": SensorEvidenceConfig(
-                    enabled=True,
-                    first_year=2000,
-                    last_year=2012,
-                    first_doy=152,
-                    last_doy=273,  # growing season only
-                    cloud_cover_threshold=40,
-                ),
-                "L8": SensorEvidenceConfig(
-                    enabled=True,
-                    first_year=2014,
-                    last_year=2024,
-                    first_doy=152,
-                    last_doy=273,
-                    cloud_cover_threshold=40,
-                ),
-            },
-            expectation_first_year=2000,
-            expectation_last_year=2003,
+            expectation=EvidencePeriodConfig(
+                sensors={
+                    "L5": SensorEvidenceConfig(
+                        enabled=True,
+                        first_year=2000,
+                        last_year=2003,
+                        first_doy=152,
+                        last_doy=273,  # growing season only
+                        cloud_cover_threshold=40,
+                    ),
+                }
+            ),
+            target=EvidencePeriodConfig(
+                sensors={
+                    "L8": SensorEvidenceConfig(
+                        enabled=True,
+                        first_year=2015,
+                        last_year=2016,
+                        first_doy=152,
+                        last_doy=273,
+                        cloud_cover_threshold=40,
+                    ),
+                }
+            ),
         ),
         reduction=ReductionConfig(band="nbr"),
         modality=ModalityConfig(constant=True, unimodal=True),
@@ -108,7 +121,7 @@ config = make_config(dampening_factor=0.5)
 
 print("=== organize_inputs ===")
 organized = organize_inputs(config)
-print("evidence count:", organized.evidence_collection.size().getInfo())
+print("target evidence count:", organized.target_collection.size().getInfo())
 r2 = organized.expectation_r2.reduceRegion(ee.Reducer.first(), POINT, 30).getInfo()
 print("expectation_r2 at point:", r2)
 

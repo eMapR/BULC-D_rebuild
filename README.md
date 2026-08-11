@@ -21,7 +21,7 @@ different job — start with `CLAUDE.md`, then go deeper as needed:
 
 ## Status
 
-Actively in progress (as of 2026-08-10). Config handling and
+Actively in progress (as of 2026-08-11). Config handling and
 continuous-evidence assembly (Landsat 5/7/8/9 + Sentinel-2) are real and
 tested. The Bayesian updating core, expectation-model/z-score layer, and
 BULC-D orchestration are implemented against a credible published
@@ -50,6 +50,15 @@ both flipped all three test points to `unchanged`-dominant, matching the
 GUI's expected render. See
 [`docs/decisions/0009`](docs/decisions/0009-masking-bugs-resolve-the-classification-gap.md)
 for the full writeup.
+
+**Restored expectation/target period split (2026-08-11).** Explicit
+direction to match the legacy GUI's structure as closely as possible,
+not just its formulas, reversed the earlier "continuous evidence stream"
+design: `EvidenceConfig` now holds separate `expectation`/`target`
+per-sensor periods, and `organize_inputs()` scores z-scores over the
+target period only, restoring the legacy's literal one-shot comparison.
+See [`docs/decisions/0010`](docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md)
+for the full reversal and its consequences.
 
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
@@ -118,9 +127,12 @@ reconstruction is an assumption rather than a verified fact.
   CLAUDE.md), `scripts/debug_disturbance_map.py` (the first full-AOI
   spatial visualization, not just a single pixel), `scripts/debug_grid_cell_map.py`
   and `scripts/debug_year_of_change_map.py` (same pipeline sourced from
-  the real study-area grid asset instead of a hand-picked box), and
+  the real study-area grid asset instead of a hand-picked box),
   `scripts/export_year_disturbance_map.py` (the first real, non-preview
-  GEE asset export).
+  GEE asset export), `scripts/run_cell_8c_comparison.py` (config-driven
+  legacy-GUI comparison, preview only), and
+  `scripts/export_cell_8c_comparison.py` (that same comparison as a real
+  GEE asset export, not just a preview).
 - `guiBULCD.rtf` — reference copy of the current production script (the
   ~7,500-line GEE JS GUI tool this rebuild replaces). Not edited in
   place — kept for reference only.
@@ -140,9 +152,12 @@ reconstruction is an assumption rather than a verified fact.
 ## Modernization goals
 
 - Preserve the Bayesian updating core (not a rewrite of the method).
-- Use the full Landsat archive (1984–present) as continuous evidence,
+- ~~Use the full Landsat archive (1984–present) as continuous evidence,
   replacing the legacy model's discrete expectation-period vs.
-  target-period comparison.
+  target-period comparison.~~ **Superseded 2026-08-11** — explicit
+  direction to match the legacy GUI's structure as closely as possible
+  restored the discrete expectation/target comparison instead; see
+  [`docs/decisions/0010`](docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md).
 - Separate the algorithm from any interface — callable programmatically,
   no Code Editor UI required.
 - Expose intermediate probability/uncertainty surfaces, not just a final

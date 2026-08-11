@@ -3,11 +3,15 @@
 SKETCH / DRAFT — not wired to the engine yet (no engine exists).
 
 This schema is a direct structural port of the legacy production
-parameter file, adapted for one change: it replaces the legacy's
-discrete "expectation period vs. target period" comparison with a
-single continuous per-sensor evidence window, per the modernization's
-primary goal (see CLAUDE.md "Modernization goals" — full Landsat
-archive as continuous evidence, not a two-period comparison).
+parameter file, including its discrete "expectation period vs. target
+period" comparison (`EvidencePeriodConfig`/`EvidenceConfig.expectation`/
+`EvidenceConfig.target` below) — restored 2026-08-11 per
+docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md
+after explicit direction to match the legacy GUI as closely as possible.
+An earlier version of this schema (2026-07-29 through 2026-08-11)
+collapsed expectation/target into one continuous per-sensor evidence
+window instead, per docs/decisions/0003 (now superseded) — see 0010 for
+the full reversal rationale.
 
 Provenance (see legacy/ for full source):
 
@@ -119,16 +123,22 @@ class StudyAreaConfig:
 
 @dataclass
 class SensorEvidenceConfig:
-    """One sensor's contribution to the continuous evidence stream.
+    """One sensor's contribution to ONE evidence period (expectation or
+    target - see `EvidencePeriodConfig`).
 
     Mirrors one of the legacy per-sensor sub-dictionaries (`L5dictionary`,
-    `L8dictionary`, `S2dictionary`, `S1dictionary`, etc. in
-    BULCD-InputParameters-v5) — but collapsed onto ONE continuous year
-    range instead of the legacy's separate expectation-period and
-    target-period dictionaries. This IS the modernization's primary
-    change: instead of picking a short "expectation" window and a short
-    "target" window, one sensor config spans as much of its archive as
-    you want treated as continuous evidence.
+    `L8dictionary`, `S2dictionary`, `S1dictionary`, etc.), which appear
+    twice in BULCD-InputParameters-v5 - once inside
+    `expectationCollectionParameters`, once inside
+    `targetCollectionParameters` (legacy/BULCD-InputParameters-v5.txt
+    lines 61-253) - each with its own `yearsList`/`firstDOY`/`lastDOY`/
+    `CloudCoverThreshold`. `first_year`/`last_year` here is a continuous
+    range standing in for the legacy's literal `yearsList` (an explicit,
+    occasionally non-contiguous list of years) - every real example we
+    have (BULCD-InputParameters-v5, cell 8C) uses contiguous years, so
+    this is a documented, lower-complexity generalization, not a
+    confirmed structural match - see
+    docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md.
     """
 
     enabled: bool = False
@@ -148,30 +158,38 @@ class SensorEvidenceConfig:
 
 
 @dataclass
-class EvidenceConfig:
-    """Continuous-archive evidence window across all enabled sensors.
+class EvidencePeriodConfig:
+    """One of the legacy's two evidence periods: `expectationCollectionParameters`
+    or `targetCollectionParameters` (legacy/BULCD-InputParameters-v5.txt).
 
-    Replaces the legacy's `expectationCollectionParameters` /
-    `targetCollectionParameters` pair with one continuous stream that
-    BULC updates through sequentially, instead of comparing two discrete
-    periods.
+    Each period gets its own per-sensor dictionary (a given sensor can be
+    enabled in one period and not the other, or configured with different
+    DOY/cloud-cover thresholds between the two - confirmed real in the
+    legacy example, e.g. L5's CloudCoverThreshold is 45 in the
+    expectation period vs. 15 in the target period).
     """
 
-    day_step_size: int = 4  # legacy dayStepSize
     sensors: dict[SensorCode, SensorEvidenceConfig] = field(default_factory=dict)
 
-    # The "expectation model still has to exist somewhere" baseline (see
-    # CLAUDE.md "Legacy parameter semantics"). This is a GLOBAL date range
-    # applied to the already-merged, sensor-agnostic evidence stream (see
-    # assemble_evidence_collection() / organize_inputs() in inputs.py) —
-    # not a per-sensor split, because organize_inputs() fits one harmonic
-    # model per pixel over one reduced band, regardless of which sensor(s)
-    # contributed images within this window. A deliberate domain choice
-    # (which real calendar years count as "normal, undisturbed forest"),
-    # not derived from sensor data-availability — loader.py validates it
-    # overlaps at least one enabled sensor's coverage.
-    expectation_first_year: int | None = None
-    expectation_last_year: int | None = None
+
+@dataclass
+class EvidenceConfig:
+    """The legacy's `expectationCollectionParameters` /
+    `targetCollectionParameters` pair, restored 2026-08-11 (see
+    docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md;
+    docs/decisions/0003, now superseded, previously collapsed these into
+    one continuous stream).
+
+    `organize_inputs()` (bulcd/inputs.py) fits the harmonic expectation
+    model against `expectation`'s assembled evidence collection, then
+    scores z-scores over `target`'s assembled evidence collection only -
+    the literal restoration of the legacy's one-shot expectation-vs-target
+    comparison, not an indefinite continuous stream.
+    """
+
+    day_step_size: int = 4  # legacy dayStepSize - shared by both periods in every real example
+    expectation: EvidencePeriodConfig = field(default_factory=EvidencePeriodConfig)
+    target: EvidencePeriodConfig = field(default_factory=EvidencePeriodConfig)
 
 
 @dataclass

@@ -1,4 +1,10 @@
-"""Assembles the continuous multi-sensor evidence stream BULC-D updates through.
+"""Assembles the two per-sensor evidence collections (expectation, target)
+BULC-D compares - see docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md.
+`organize_inputs()` fits the harmonic expectation model against the
+expectation period's collection and scores z-scores over the target
+period's collection only - the restored legacy shape, not an indefinite
+continuous stream (docs/decisions/0003, now superseded, previously did
+the latter).
 
 This is a PARTIAL implementation. See CLAUDE.md "Legacy source repos and
 what's still missing" for the full picture; summary:
@@ -8,10 +14,10 @@ REAL, WORKING:
   - `assemble_evidence_collection()` — harmonized Landsat 5/7/8/9
     Collection 2 Level 2 surface reflectance, reduced to one spectral
     index (NBR/SWIR/NDVI per config.reduction.band), filtered to each
-    sensor's configured continuous year range + seasonal day-of-year
-    window, merged into one ee.ImageCollection sorted by time. This is
-    the "full archive as continuous evidence" piece of the
-    modernization. Cloud masking is sensor-specific, CONFIRMED 2026-08-10
+    sensor's configured year range + seasonal day-of-year window for ONE
+    evidence period (expectation or target - see `EvidencePeriodConfig`),
+    merged into one ee.ImageCollection sorted by time. Called twice by
+    `organize_inputs()`, once per period. Cloud masking is sensor-specific, CONFIRMED 2026-08-10
     against the real afn_gatherCollectionsAndReduce source
     (legacy/515-gatherCollections27b.txt) - L5/L7 and L8/L9 use two
     genuinely different QA_PIXEL bit checks (see
@@ -34,14 +40,13 @@ STUBBED, NOT IMPLEMENTED:
 PARTIAL, PARTLY CONFIRMED AGAINST THE REAL SOURCE:
   - `organize_inputs()` — the legacy `afn_organizeBULCD_Inputs`
     equivalent: fits the expectation-period harmonic regression (shape
-    selected by config.modality) against a global baseline window
-    (config.evidence.expectation_first_year/last_year), then scores the
-    ENTIRE continuous evidence stream into z-scores (per
-    config.sensitivity) against that fit - the "continuous stream"
-    piece is a deliberate modernization divergence from the legacy's
-    discrete expectation/target split (see
-    docs/decisions/0003-continuous-evidence-replaces-expectation-target-split.md),
-    not something to reconcile against source. Its real implementation
+    selected by config.modality) against `config.evidence.expectation`'s
+    assembled evidence collection, then scores ONLY `config.evidence.target`'s
+    assembled evidence collection into z-scores (per config.sensitivity)
+    against that fit - the restored legacy expectation/target split (see
+    docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md;
+    docs/decisions/0003, now superseded, previously scored the entire
+    continuous archive instead). Its real implementation
     lives in `6002.A2b.3-BULCD-Module-organizeBULCD_Inputs`
     (`alemlakes/r-2903-Dev`), fetched 2026-08-10
     (see docs/findings.md "organizeBULCD_Inputs obtained"). Several
@@ -74,7 +79,7 @@ import ee
 
 from bulcd.config.schema import (
     BULCDConfig,
-    EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     SensitivityConfig,
     SensorEvidenceConfig,
@@ -267,10 +272,11 @@ def _s2_evidence(cfg: SensorEvidenceConfig, study_area: ee.Geometry, band: str) 
 
 
 def _evidence_date_and_doy_bounds(
-    evidence: EvidenceConfig,
+    period: EvidencePeriodConfig,
 ) -> tuple[int, int, int, int]:
     """Union (not intersection) of every enabled sensor's resolved year
-    range and DOY window.
+    range and DOY window, within ONE evidence period (expectation or
+    target).
 
     CONFIRMED 2026-08-10 against the real afn_gatherCollectionsAndReduce
     source (515-gatherCollections27b): production computes ONE combined
@@ -286,7 +292,7 @@ def _evidence_date_and_doy_bounds(
     last_years: list[int] = []
     first_doys: list[int] = []
     last_doys: list[int] = []
-    for sensor_code, sensor_cfg in evidence.sensors.items():
+    for sensor_code, sensor_cfg in period.sensors.items():
         if not sensor_cfg.enabled:
             continue
         start, end = _date_bounds(sensor_code, sensor_cfg)
@@ -372,21 +378,22 @@ def _bin_evidence_by_day_step(
     return ee.ImageCollection(joined.map(_bin_image))
 
 
-def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
-    """Builds the continuous, multi-sensor, single-band evidence stream.
+def assemble_evidence_collection(config: BULCDConfig, period: EvidencePeriodConfig) -> ee.ImageCollection:
+    """Builds ONE evidence period's (expectation or target) multi-sensor,
+    single-band evidence collection.
 
     Real, working implementation for Landsat 5/7/8/9 and Sentinel-2. Raises
     NotImplementedError for any other enabled sensor (see module docstring).
     Each raw satellite image is first cloud-masked and reduced to one band
-    per sensor, then binned into `evidence.day_step_size`-day windows and
-    median-combined within each window (see `_bin_evidence_by_day_step()`)
+    per sensor, then binned into `config.evidence.day_step_size`-day windows
+    and median-combined within each window (see `_bin_evidence_by_day_step()`)
     - the actual "Event" granularity production uses, confirmed 2026-08-10.
     """
     study_area = resolve_study_area(config.study_area)
     band = config.reduction.band
     collections = []
 
-    for sensor_code, sensor_cfg in config.evidence.sensors.items():
+    for sensor_code, sensor_cfg in period.sensors.items():
         if not sensor_cfg.enabled:
             continue
         if sensor_code in _LANDSAT_COLLECTION_ID:
@@ -415,7 +422,7 @@ def assemble_evidence_collection(config: BULCDConfig) -> ee.ImageCollection:
     # the sibling GeoTimeSeries project's CLAUDE.md for harmonized_collection()).
     merged = merged.map(lambda img: img.toFloat()).sort("system:time_start")
 
-    first_year, last_year, first_doy, last_doy = _evidence_date_and_doy_bounds(config.evidence)
+    first_year, last_year, first_doy, last_doy = _evidence_date_and_doy_bounds(period)
     return _bin_evidence_by_day_step(
         merged, band, config.evidence.day_step_size, first_year, last_year, first_doy, last_doy
     )
@@ -437,21 +444,21 @@ class ExpectationFit:
 
 @dataclass
 class OrganizedInputs:
-    """Return type of organize_inputs() - the legacy `bulcD_input` object,
-    generalized from a single expectation/target-period comparison to a
-    continuous evidence stream (see module docstring)."""
+    """Return type of organize_inputs() - the legacy `bulcD_input` object
+    (see module docstring): expectation-period fit + target-period z-score
+    stream, the restored one-shot expectation-vs-target comparison."""
 
-    evidence_collection: ee.ImageCollection
+    expectation_collection: ee.ImageCollection
+    target_collection: ee.ImageCollection
     expectation_r2: ee.Image
     expectation_residual_stddev: ee.Image
-    # One 'fitted' band added per timestep across the FULL evidence
-    # collection (not just the baseline window) - legacy's expectCollectionFit,
-    # generalized so the same fitted curve can be inspected/plotted at any
-    # point in the continuous stream, not just within the expectation period.
+    # One 'fitted' band added per target-period timestep - legacy's
+    # expectCollectionFit, applied to the target collection only (not the
+    # expectation collection it was fit against).
     expectation_fitted_collection: ee.ImageCollection
-    # One z-score image per evidence timestep (legacy targetLOFAsZScore,
-    # generalized from a single target-period image to a continuous stream -
-    # the modernization's central algorithmic change).
+    # One z-score image per TARGET-period evidence timestep (legacy
+    # targetLOFAsZScore) - what engine.py bins and folds through the
+    # Bayesian updater.
     lof_zscore: ee.ImageCollection
 
 
@@ -621,26 +628,21 @@ def _zscore_image(
 
 def organize_inputs(config: BULCDConfig) -> OrganizedInputs:
     """The legacy `afn_organizeBULCD_Inputs` equivalent (see module docstring
-    for what's implemented against a reconstruction vs. the real source)."""
-    if config.evidence.expectation_first_year is None or config.evidence.expectation_last_year is None:
-        raise ValueError(
-            "organize_inputs() requires evidence.expectation_first_year and "
-            "expectation_last_year to be set - the baseline window the "
-            "expectation model is fit against. See CLAUDE.md 'Design decision: "
-            "the expectation baseline window'."
-        )
+    for what's implemented against a reconstruction vs. the real source).
 
+    Fits the harmonic expectation model against `config.evidence.expectation`'s
+    collection, then scores ONLY `config.evidence.target`'s collection into
+    z-scores against that fit - the restored one-shot expectation-vs-target
+    comparison (docs/decisions/0010).
+    """
     band = config.reduction.band
-    evidence_collection = assemble_evidence_collection(config)
-
-    expectation_start = f"{config.evidence.expectation_first_year}-01-01"
-    expectation_end = f"{config.evidence.expectation_last_year}-01-01"
-    expectation_collection = evidence_collection.filterDate(expectation_start, expectation_end)
+    expectation_collection = assemble_evidence_collection(config, config.evidence.expectation)
+    target_collection = assemble_evidence_collection(config, config.evidence.target)
 
     fit = _fit_expectation_model(expectation_collection, config.modality, band)
 
-    harmonic_full = evidence_collection.map(_add_harmonic_terms)
-    expectation_fitted_collection = harmonic_full.map(
+    harmonic_target = target_collection.map(_add_harmonic_terms)
+    expectation_fitted_collection = harmonic_target.map(
         lambda img: _add_fitted_band(img, fit.coefficients, fit.regressor_names)
     )
 
@@ -653,7 +655,8 @@ def organize_inputs(config: BULCDConfig) -> OrganizedInputs:
     lof_zscore = expectation_fitted_collection.map(_add_zscore).select("zscore")
 
     return OrganizedInputs(
-        evidence_collection=evidence_collection,
+        expectation_collection=expectation_collection,
+        target_collection=target_collection,
         expectation_r2=fit.r2,
         expectation_residual_stddev=fit.residual_stddev,
         expectation_fitted_collection=expectation_fitted_collection,

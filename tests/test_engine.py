@@ -13,12 +13,13 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     StudyAreaConfig,
 )
 from bulcd.engine import run_bulcd
 
 _STUDY_AREA = StudyAreaConfig(aoi_coordinates=[[0, 0], [0, 1], [1, 1]])
-_EVIDENCE = EvidenceConfig(sensors={}, expectation_first_year=2015, expectation_last_year=2017)
+_EVIDENCE = EvidenceConfig(expectation=EvidencePeriodConfig(), target=EvidencePeriodConfig())
 
 
 def test_run_bulcd_requires_transition_matrix():

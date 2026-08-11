@@ -11,9 +11,14 @@ MINIMAL_YAML = """
 study_area:
   aoi_asset: users/x/y
 evidence:
-  sensors:
-    L8:
-      enabled: true
+  expectation:
+    sensors:
+      L8:
+        enabled: true
+  target:
+    sensors:
+      L8:
+        enabled: true
 export:
   destination: asset
   asset_folder: users/x/y:out/
@@ -29,11 +34,13 @@ def test_loads_example_config():
     ]
     assert config.study_area.scale == 30
 
-    assert set(config.evidence.sensors) == {"L8", "L9", "S2", "S1"}
-    assert config.evidence.sensors["L8"].enabled is True
-    assert config.evidence.sensors["L8"].first_year == 2013
-    assert config.evidence.sensors["L8"].last_year is None
-    assert config.evidence.sensors["S1"].sar_polarization == "HV"
+    assert set(config.evidence.expectation.sensors) == {"L8", "L9", "S2", "S1"}
+    assert config.evidence.expectation.sensors["L8"].enabled is True
+    assert config.evidence.expectation.sensors["L8"].first_year == 2015
+    assert config.evidence.expectation.sensors["L8"].last_year == 2017
+    assert config.evidence.target.sensors["L8"].first_year == 2017
+    assert config.evidence.target.sensors["L8"].last_year == 2018
+    assert config.evidence.expectation.sensors["S1"].sar_polarization == "HV"
 
     assert config.reduction.band == "swir"
     assert config.modality.constant is True
@@ -41,9 +48,6 @@ def test_loads_example_config():
     assert config.sensitivity.z_score_numerator_factor == 1
     assert config.bin_cuts == [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
     assert config.plotting_means is True
-
-    assert config.evidence.expectation_first_year == 2015
-    assert config.evidence.expectation_last_year == 2017
 
     assert config.bulc_advanced_params.dampening_factor == 0.5
     assert config.bulc_advanced_params.recency_factor == 1.0
@@ -73,9 +77,8 @@ def test_study_area_requires_exactly_one_aoi_source(tmp_path):
         "  aoi_asset: users/x/y\n"
         "  aoi_coordinates: [[0, 0], [0, 1], [1, 1]]\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: true\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: true\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
     )
     with pytest.raises(ConfigError, match="exactly one"):
         load_config(bad_config)
@@ -83,9 +86,8 @@ def test_study_area_requires_exactly_one_aoi_source(tmp_path):
     bad_config.write_text(
         "study_area: {}\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: true\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: true\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
     )
     with pytest.raises(ConfigError, match="exactly one"):
         load_config(bad_config)
@@ -97,9 +99,8 @@ def test_invalid_sensor_code_raises(tmp_path):
         "study_area:\n"
         "  aoi_asset: users/x/y\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L99:\n"
-        "      enabled: true\n"
+        "  expectation:\n    sensors:\n      L99:\n        enabled: true\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
     )
     with pytest.raises(ConfigError, match="L99"):
         load_config(bad_config)
@@ -111,11 +112,35 @@ def test_no_enabled_sensors_raises(tmp_path):
         "study_area:\n"
         "  aoi_asset: users/x/y\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: false\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: false\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
     )
     with pytest.raises(ConfigError, match="at least one sensor"):
+        load_config(bad_config)
+
+
+def test_missing_target_period_raises(tmp_path):
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text(
+        "study_area:\n"
+        "  aoi_asset: users/x/y\n"
+        "evidence:\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: true\n"
+    )
+    with pytest.raises(ConfigError, match="evidence.target"):
+        load_config(bad_config)
+
+
+def test_empty_expectation_sensors_raises(tmp_path):
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text(
+        "study_area:\n"
+        "  aoi_asset: users/x/y\n"
+        "evidence:\n"
+        "  expectation:\n    sensors: {}\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
+    )
+    with pytest.raises(ConfigError, match="evidence.expectation.sensors"):
         load_config(bad_config)
 
 
@@ -125,10 +150,12 @@ def test_sar_polarization_rejected_for_non_sar_sensor(tmp_path):
         "study_area:\n"
         "  aoi_asset: users/x/y\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: true\n"
-        "      sar_polarization: HV\n"
+        "  expectation:\n"
+        "    sensors:\n"
+        "      L8:\n"
+        "        enabled: true\n"
+        "        sar_polarization: HV\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
     )
     with pytest.raises(ConfigError, match="sar_polarization"):
         load_config(bad_config)
@@ -140,9 +167,8 @@ def test_asset_destination_requires_asset_folder(tmp_path):
         "study_area:\n"
         "  aoi_asset: users/x/y\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n"
-        "      enabled: true\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: true\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
         "export:\n"
         "  destination: asset\n"
     )
@@ -177,10 +203,8 @@ def test_minimal_config_uses_defaults(tmp_path):
     assert config.reduction.band == "nbr"
     assert config.bin_cuts == [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
     assert config.evidence.day_step_size == 4
-    assert config.evidence.sensors["L8"].first_doy == 1
-    assert config.evidence.sensors["L8"].last_doy == 365
-    assert config.evidence.expectation_first_year is None
-    assert config.evidence.expectation_last_year is None
+    assert config.evidence.expectation.sensors["L8"].first_doy == 1
+    assert config.evidence.expectation.sensors["L8"].last_doy == 365
     assert config.bulc_advanced_params.custom_transition_matrix is None
     assert config.bulc_advanced_params.dampening_factor == 0.5
     assert config.study_area.mask_water is True
@@ -193,56 +217,12 @@ def test_mask_water_can_be_disabled(tmp_path):
         "  aoi_asset: users/x/y\n"
         "  mask_water: false\n"
         "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n      enabled: true\n"
+        "  expectation:\n    sensors:\n      L8:\n        enabled: true\n"
+        "  target:\n    sensors:\n      L8:\n        enabled: true\n"
         "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
     )
     config = load_config(cfg_path)
     assert config.study_area.mask_water is False
-
-
-def test_expectation_window_requires_both_years_together(tmp_path):
-    cfg_path = tmp_path / "cfg.yaml"
-    cfg_path.write_text(
-        "study_area:\n  aoi_asset: users/x/y\n"
-        "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n      enabled: true\n"
-        "  expectation_first_year: 2015\n"
-        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
-    )
-    with pytest.raises(ConfigError, match="expectation_first_year and expectation_last_year"):
-        load_config(cfg_path)
-
-
-def test_expectation_window_must_be_ordered(tmp_path):
-    cfg_path = tmp_path / "cfg.yaml"
-    cfg_path.write_text(
-        "study_area:\n  aoi_asset: users/x/y\n"
-        "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n      enabled: true\n"
-        "  expectation_first_year: 2018\n"
-        "  expectation_last_year: 2015\n"
-        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
-    )
-    with pytest.raises(ConfigError, match="must be before"):
-        load_config(cfg_path)
-
-
-def test_expectation_window_must_overlap_an_enabled_sensor(tmp_path):
-    cfg_path = tmp_path / "cfg.yaml"
-    cfg_path.write_text(
-        "study_area:\n  aoi_asset: users/x/y\n"
-        "evidence:\n"
-        "  sensors:\n"
-        "    L8:\n      enabled: true\n      first_year: 2013\n      last_year: 2014\n"
-        "  expectation_first_year: 2018\n"
-        "  expectation_last_year: 2019\n"
-        "export:\n  destination: asset\n  asset_folder: users/x/y:out/\n"
-    )
-    with pytest.raises(ConfigError, match="don't overlap"):
-        load_config(cfg_path)
 
 
 def test_custom_transition_matrix_shape_validated(tmp_path):

@@ -35,6 +35,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     ReductionConfig,
     SensitivityConfig,
@@ -68,27 +69,34 @@ NBR12_TRANSITION_MATRIX = [
 
 config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=AOI),  # mask_water defaults True
+    # Restored expectation/target period split (docs/decisions/0010):
+    # expectation = pre-fire baseline (L5), target = the first full
+    # growing season after the fire (L5) - matches debug_bb_complex_fire.py.
     evidence=EvidenceConfig(
-        sensors={
-            "L5": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2000,
-                last_year=2012,
-                first_doy=152,
-                last_doy=273,
-                cloud_cover_threshold=40,
-            ),
-            "L8": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2014,
-                last_year=2024,
-                first_doy=152,
-                last_doy=273,
-                cloud_cover_threshold=40,
-            ),
-        },
-        expectation_first_year=2000,
-        expectation_last_year=2003,
+        expectation=EvidencePeriodConfig(
+            sensors={
+                "L5": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2000,
+                    last_year=2003,
+                    first_doy=152,
+                    last_doy=273,
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
+        target=EvidencePeriodConfig(
+            sensors={
+                "L5": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2004,
+                    last_year=2005,
+                    first_doy=152,
+                    last_doy=273,
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
     ),
     reduction=ReductionConfig(band="nbr"),
     modality=ModalityConfig(constant=True, unimodal=True),

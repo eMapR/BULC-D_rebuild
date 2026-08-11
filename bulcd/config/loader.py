@@ -18,6 +18,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ExportConfig,
     ModalityConfig,
     ReductionConfig,
@@ -111,86 +112,54 @@ def _build_study_area(section: dict[str, Any]) -> StudyAreaConfig:
 
 
 def _build_evidence(section: dict[str, Any]) -> EvidenceConfig:
+    return EvidenceConfig(
+        day_step_size=section.get("day_step_size", 4),
+        expectation=_build_evidence_period(_require_field(section, "expectation", "evidence"), "expectation"),
+        target=_build_evidence_period(_require_field(section, "target", "evidence"), "target"),
+    )
+
+
+def _build_evidence_period(section: dict[str, Any], period_name: str) -> EvidencePeriodConfig:
+    if not isinstance(section, dict):
+        raise ConfigError(f"evidence.{period_name} must be a mapping, got {type(section).__name__}")
+
     sensors_section = section.get("sensors")
     if not isinstance(sensors_section, dict) or not sensors_section:
-        raise ConfigError("evidence.sensors must be a non-empty mapping of sensor code -> config")
+        raise ConfigError(
+            f"evidence.{period_name}.sensors must be a non-empty mapping of sensor code -> config"
+        )
 
     sensors: dict[str, SensorEvidenceConfig] = {}
     for code, entry in sensors_section.items():
         if code not in _VALID_SENSOR_CODES:
             raise ConfigError(
-                f"evidence.sensors key '{code}' is not one of {sorted(_VALID_SENSOR_CODES)}"
+                f"evidence.{period_name}.sensors key '{code}' is not one of "
+                f"{sorted(_VALID_SENSOR_CODES)}"
             )
-        sensors[code] = _build_sensor_evidence(entry, code)
+        sensors[code] = _build_sensor_evidence(entry, code, period_name)
 
     if not any(s.enabled for s in sensors.values()):
-        raise ConfigError("evidence.sensors: at least one sensor must have enabled: true")
-
-    expectation_first_year = section.get("expectation_first_year")
-    expectation_last_year = section.get("expectation_last_year")
-    if (expectation_first_year is None) != (expectation_last_year is None):
         raise ConfigError(
-            "evidence: expectation_first_year and expectation_last_year must be set together"
+            f"evidence.{period_name}.sensors: at least one sensor must have enabled: true"
         )
-    if expectation_first_year is not None and expectation_last_year is not None:
-        if expectation_first_year >= expectation_last_year:
-            raise ConfigError(
-                "evidence: expectation_first_year must be before expectation_last_year"
-            )
-        if not _expectation_window_overlaps_a_sensor(
-            expectation_first_year, expectation_last_year, sensors
-        ):
-            raise ConfigError(
-                "evidence: expectation_first_year/expectation_last_year "
-                f"({expectation_first_year}-{expectation_last_year}) don't overlap any "
-                "enabled sensor's configured year range - the expectation-model fit "
-                "would have zero samples"
-            )
 
-    return EvidenceConfig(
-        day_step_size=section.get("day_step_size", 4),
-        sensors=sensors,
-        expectation_first_year=expectation_first_year,
-        expectation_last_year=expectation_last_year,
-    )
+    return EvidencePeriodConfig(sensors=sensors)
 
 
-def _expectation_window_overlaps_a_sensor(
-    expectation_first_year: int,
-    expectation_last_year: int,
-    sensors: dict[str, SensorEvidenceConfig],
-) -> bool:
-    """True if the expectation window overlaps at least one enabled sensor's
-    configured [first_year, last_year) range.
-
-    A sensor's first_year/last_year of None means "open-ended" (earliest/most
-    recent available - resolved later in inputs.py against real launch-year
-    data), treated here as -inf/+inf for overlap purposes rather than
-    importing inputs.py's launch-year table into the config layer.
-    """
-    for sensor in sensors.values():
-        if not sensor.enabled:
-            continue
-        sensor_first = sensor.first_year if sensor.first_year is not None else float("-inf")
-        sensor_last = sensor.last_year if sensor.last_year is not None else float("inf")
-        if sensor_first < expectation_last_year and expectation_first_year < sensor_last:
-            return True
-    return False
-
-
-def _build_sensor_evidence(entry: dict[str, Any], code: str) -> SensorEvidenceConfig:
+def _build_sensor_evidence(entry: dict[str, Any], code: str, period_name: str) -> SensorEvidenceConfig:
+    prefix = f"evidence.{period_name}.sensors.{code}"
     if not isinstance(entry, dict):
-        raise ConfigError(f"evidence.sensors.{code} must be a mapping, got {type(entry).__name__}")
+        raise ConfigError(f"{prefix} must be a mapping, got {type(entry).__name__}")
 
     sar_polarization = entry.get("sar_polarization")
     if sar_polarization is not None:
         if code not in _SAR_SENSOR_CODES:
             raise ConfigError(
-                f"evidence.sensors.{code}.sar_polarization is only valid for {sorted(_SAR_SENSOR_CODES)}"
+                f"{prefix}.sar_polarization is only valid for {sorted(_SAR_SENSOR_CODES)}"
             )
         if sar_polarization not in _VALID_SAR_POLARIZATIONS:
             raise ConfigError(
-                f"evidence.sensors.{code}.sar_polarization '{sar_polarization}' is not one of "
+                f"{prefix}.sar_polarization '{sar_polarization}' is not one of "
                 f"{sorted(_VALID_SAR_POLARIZATIONS)}"
             )
 

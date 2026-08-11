@@ -288,11 +288,16 @@ useful context that isn't obvious from the field names alone:
 - **Expectation period vs. target period**: the legacy's core method
   treats a short "expectation" window as ground truth for "normal,
   undisturbed forest" and a separate "target" window as what's compared
-  against it. This rebuild replaces that discrete comparison with a
-  continuous evidence stream and a single global baseline window — see
-  `docs/decisions/0003-continuous-evidence-replaces-expectation-target-split.md`
-  for the full decision and its code-level implications (the "target
-  period" has no code representation at all in the new design).
+  against it. This rebuild's schema now restores that exact split —
+  `EvidenceConfig.expectation`/`EvidenceConfig.target`, each an
+  `EvidencePeriodConfig` (`bulcd/config/schema.py`) — after briefly
+  replacing it with a continuous evidence stream + single global baseline
+  window (`docs/decisions/0003`, now superseded). See
+  `docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md`
+  for the full reversal: direction from the user's boss to match the
+  legacy GUI's structure as closely as possible, not just its formulas.
+  `organize_inputs()` fits the harmonic model against `expectation`'s
+  collection and scores z-scores over `target`'s collection only.
 - **`modalityDictionary`** (→ `ModalityConfig`): picks the seasonal-curve
   shape fit to the expectation period per pixel (constant = no
   seasonality, typically evergreen; unimodal = one seasonal peak,
@@ -344,9 +349,14 @@ useful context that isn't obvious from the field names alone:
 
 - **Preserve the Bayesian updating core** — this is not a rewrite of the
   method, just the software and data-usage strategy around it.
-- **Use the full Landsat archive (1984–present) as continuous evidence**,
-  instead of the legacy model's discrete "expectation period vs. target
-  period" comparison. This is the primary objective, not a nice-to-have.
+- ~~**Use the full Landsat archive (1984–present) as continuous
+  evidence**, instead of the legacy model's discrete "expectation period
+  vs. target period" comparison. This is the primary objective, not a
+  nice-to-have.~~ **Superseded 2026-08-11** — explicit direction from the
+  user's boss to match the legacy GUI's structure as closely as possible
+  overrides this goal; the discrete expectation/target comparison is
+  restored instead. See
+  `docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md`.
 - **Separate the algorithm from the GUI.** The legacy script's biggest
   structural problem is that `afn_runBULCD_Interface` and `afn_runBULCD_Code`
   are entangled — the engine must become callable programmatically without
@@ -376,11 +386,13 @@ useful context that isn't obvious from the field names alone:
 ## Current code state
 
 - `bulcd/config/schema.py` — typed config dataclasses (`BULCDConfig` and
-  its sub-configs: `StudyAreaConfig`, `EvidenceConfig`/`SensorEvidenceConfig`
-  (continuous per-sensor evidence window, replacing the legacy
-  expectation/target split, plus a global `expectation_first_year`/
-  `expectation_last_year` baseline window — see
-  `docs/decisions/0003-continuous-evidence-replaces-expectation-target-split.md`),
+  its sub-configs: `StudyAreaConfig`, `EvidenceConfig` (holds
+  `expectation`/`target`, each an `EvidencePeriodConfig` wrapping
+  `dict[SensorCode, SensorEvidenceConfig]` — the restored legacy
+  expectation/target period split, see
+  `docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md`;
+  `docs/decisions/0003`, now superseded, previously collapsed these into
+  one continuous stream + a global baseline window),
   `ReductionConfig`, `ModalityConfig`, `SensitivityConfig`,
   `BULCAdvancedParams` (now partially typed: `custom_transition_matrix`,
   `dampening_factor`, `recency_factor` — see
@@ -393,13 +405,13 @@ useful context that isn't obvious from the field names alone:
   YAML, validates required fields and enum-like values section by
   section (including cross-field checks like "exactly one of
   `aoi_asset`/`aoi_coordinates`", "`sar_polarization` only valid for
-  S1/AL", the expectation window overlapping at least one enabled
-  sensor's range, `custom_transition_matrix` being 10×3, `bin_cuts`
-  length + 1 matching the transition matrix's row count, `dampening_factor`
-  in `(0, 1]`), raises `ConfigError` with a specific message rather than
-  silently defaulting — a bad config here means a real, billed Earth
-  Engine export runs against the wrong AOI/dates. 24 passing tests in
-  `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
+  S1/AL", `evidence.expectation`/`evidence.target` each required and each
+  needing at least one enabled sensor, `custom_transition_matrix` being
+  10×3, `bin_cuts` length + 1 matching the transition matrix's row count,
+  `dampening_factor` in `(0, 1]`), raises `ConfigError` with a specific
+  message rather than silently defaulting — a bad config here means a
+  real, billed Earth Engine export runs against the wrong AOI/dates. 24
+  passing tests in `tests/test_config_loader.py`; `configs/example.yaml` is a filled-out
   example (including a transcription of Willis (2022)'s worked NBR12
   transition matrix, clearly commented as an example, not a shipped
   default). `configs/cell_8c_comparison.yaml` is the first config
@@ -407,10 +419,12 @@ useful context that isn't obvious from the field names alone:
   Python config — see `docs/findings.md`'s "Legacy-GUI parameter
   matching" and "Real production BULC-D parameters" entries.
 - `bulcd/inputs.py` — PARTIAL. Real, working: `resolve_study_area()` and
-  `assemble_evidence_collection()` (harmonized Landsat 5/7/8/9
+  `assemble_evidence_collection(config, period)` (harmonized Landsat 5/7/8/9
   Collection 2 Level 2 SR, NBR/SWIR/NDVI reduction, per-sensor continuous
   year range + seasonal DOY filter via `ee.Filter.calendarRange`, merged
-  + `.toFloat()`-cast + time-sorted), PLUS Sentinel-2
+  + `.toFloat()`-cast + time-sorted, for ONE `EvidencePeriodConfig` at a
+  time — called once for `config.evidence.expectation`, once for
+  `config.evidence.target`), PLUS Sentinel-2
   (`COPERNICUS/S2_SR_HARMONIZED`). **Cloud masking corrected 2026-08-10**
   against the real `515-gatherCollections27b` source, confirmed wrong for
   every sensor: L5/L7 and L8/L9 now use two genuinely different QA_PIXEL
@@ -448,9 +462,10 @@ useful context that isn't obvious from the field names alone:
   an additive epsilon); `residual_stddev` is a plain `n-1` sample
   standard deviation of residuals (not a regression
   residual-standard-error). Also confirmed: the legacy's discrete
-  expectation/target split is real in production, and this rebuild's
-  continuous full-stream scoring is a deliberate, confirmed divergence
-  (see `docs/decisions/0003`), not a gap to close. Modality-priority
+  expectation/target split is real in production — this rebuild briefly
+  diverged from it (continuous full-stream scoring, `docs/decisions/0003`)
+  before restoring it exactly (`docs/decisions/0010`, 2026-08-11, per
+  explicit direction to match the GUI's structure). Modality-priority
   resolution FIXED (2026-08-10): the real source
   (`502.7-1h5-HarmonicFunctions`) confirmed production is ADDITIVE (every
   true `ModalityConfig` flag's terms concatenate), not "richest shape
@@ -463,14 +478,17 @@ useful context that isn't obvious from the field names alone:
   Bayesian engine; cell 8C's config only ever exercises the
   unimodal-alone regressor path regardless) — real, correct fixes,
   confirmed classification-inert for this specific config. Fits a
-  harmonic regression per pixel over a
-  configurable global baseline window (`ee.Reducer.linearRegression`,
-  continuous fractional-year time axis rather than day-of-year, so
-  multi-year baselines don't wrap around at year boundaries), then
-  scores the *entire* evidence stream (baseline included, as a sanity
-  check) into a continuous z-score `ee.ImageCollection`. VERIFIED against
-  real Earth Engine at a single test pixel and at cell 8C — not a
-  substitute for broader validation across more pixels/AOIs/conditions.
+  harmonic regression per pixel over the expectation period's collection
+  (`ee.Reducer.linearRegression`, continuous fractional-year time axis
+  rather than day-of-year, so multi-year expectation windows don't wrap
+  around at year boundaries), then scores ONLY the target period's
+  collection into z-scores (restored 2026-08-11, `docs/decisions/0010` —
+  previously scored the *entire* evidence stream, baseline included, as
+  a continuous z-score `ee.ImageCollection`). VERIFIED against real Earth
+  Engine at a single test pixel and at cell 8C under the prior
+  continuous-stream design — not yet revalidated under the restored
+  split, and not a substitute for broader validation across more
+  pixels/AOIs/conditions.
 - `bulcd/bulc.py` — NEW, real code: the generic, index/sensor-agnostic
   Bayesian updating engine (`dampen()`, `bayes_update()`, `run_bulc()`),
   a direct implementation of Cardille & Fortin (2016) Eq. 1/2 and its
@@ -553,10 +571,13 @@ useful context that isn't obvious from the field names alone:
   real test pixels plus multiple full-AOI maps. `scripts/debug_run.py`,
   `scripts/debug_bb_complex_fire.py`, `scripts/debug_long_baseline_disturbance.py`,
   `scripts/debug_disturbance_map.py`, `scripts/debug_grid_cell_map.py`,
-  and `scripts/debug_year_of_change_map.py` are the actual runnable
-  entry points today — hardcoded test AOIs/configs, cheap preview
-  renders (`.getInfo()`/`.getThumbURL()`), not a real CLI
-  (`bulcd/cli.py` doesn't exist yet).
+  `scripts/debug_year_of_change_map.py`, and `scripts/run_cell_8c_comparison.py`
+  are the actual runnable entry points today — hardcoded test AOIs/configs
+  (or, for the last one, `configs/cell_8c_comparison.yaml`), cheap
+  preview renders (`.getInfo()`/`.getThumbURL()`), not a real CLI
+  (`bulcd/cli.py` doesn't exist yet). `scripts/export_year_disturbance_map.py`
+  and `scripts/export_cell_8c_comparison.py` (new 2026-08-11) are the two
+  real, non-preview `Export.image.toAsset()` entry points.
 - `bulcd/interpret.py` — partial: `year_of_change()`/
   `disturbance_mask_for_year()` (the "when did this pixel change"
   question) plus `zscore_anomaly_mask_for_year()` (the "was this pixel
@@ -574,14 +595,28 @@ useful context that isn't obvious from the field names alone:
   resolution over the same test AOI. `zscore_anomaly_mask_for_year()`
   VERIFIED at full-cell scale. Explicitly does NOT handle "changed, then
   recovered" — a documented limitation pending the real
-  `afn_interpretBULCDResult` source.
+  `afn_interpretBULCDResult` source. **Not yet reconsidered for the
+  restored expectation/target split** (`docs/decisions/0010`,
+  2026-08-11): both functions were built to search a long multi-year
+  `classification_stack`, which is now typically just the target
+  period's short single-season Event sequence - "when did it change"
+  mostly collapses to "did it change within this target window" under
+  the restored design, a materially simpler question this module hasn't
+  been updated to answer yet. Flagged as an open follow-up, not silently
+  left stale.
 - `bulcd/export.py` — `export_image_to_asset()`, a thin wrapper starting
   (not blocking on) an `ee.batch.Export.image.toAsset()` task. Used in
   production for `scripts/export_year_disturbance_map.py` (see
   `docs/findings.md`'s "Two-layer..." and "Non-forest mask" entries for
   what was and wasn't verified in that run, and an open, unresolved
   question about asset-listing calls not finding successfully-exported
-  assets).
+  assets) and `scripts/export_cell_8c_comparison.py` (new 2026-08-11,
+  see `docs/findings.md`'s "Expectation/target split restored..." entry —
+  exports cell 8C's `final_probabilities` to
+  `projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`
+  for a real asset-level comparison against the GUI's own render; started
+  but classification not yet revalidated against the GUI under the
+  restored split).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

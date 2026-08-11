@@ -23,6 +23,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     ReductionConfig,
     SensitivityConfig,
@@ -58,19 +59,35 @@ NBR12_TRANSITION_MATRIX = [
 
 config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=SMALL_AOI),
+    # Restored expectation/target period split (docs/decisions/0010) -
+    # expectation = 2014-2016 baseline, target = the single following
+    # season, matching the legacy's one-shot comparison shape instead of
+    # scoring an indefinite continuous stream.
     evidence=EvidenceConfig(
-        sensors={
-            "L8": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2014,
-                last_year=2021,
-                first_doy=152,
-                last_doy=273,
-                cloud_cover_threshold=40,
-            )
-        },
-        expectation_first_year=2014,
-        expectation_last_year=2016,
+        expectation=EvidencePeriodConfig(
+            sensors={
+                "L8": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2014,
+                    last_year=2016,
+                    first_doy=152,
+                    last_doy=273,
+                    cloud_cover_threshold=40,
+                )
+            }
+        ),
+        target=EvidencePeriodConfig(
+            sensors={
+                "L8": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2016,
+                    last_year=2017,
+                    first_doy=152,
+                    last_doy=273,
+                    cloud_cover_threshold=40,
+                )
+            }
+        ),
     ),
     reduction=ReductionConfig(band="nbr"),
     modality=ModalityConfig(constant=True, unimodal=True),
@@ -83,7 +100,7 @@ config = BULCDConfig(
 )
 
 print("=== Step 1: assemble_evidence_collection ===")
-evidence = assemble_evidence_collection(config)
+evidence = assemble_evidence_collection(config, config.evidence.target)
 print("evidence count:", evidence.size().getInfo())
 
 print("=== Step 2: organize_inputs ===")

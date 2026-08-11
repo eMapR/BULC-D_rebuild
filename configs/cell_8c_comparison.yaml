@@ -14,10 +14,11 @@
 #   Expectation: year 2024, DOY 74-288, cloud cover threshold 70
 #   Target: year 2025, DOY 74-288, cloud cover threshold 70
 #   Value to track: NBR
-#   (DOY updated 2026-08-10: both expectation and target moved from
-#   1-365 to 74-288 - our schema has one first_doy/last_doy per sensor
-#   covering the whole continuous evidence stream, no separate
-#   expectation-only/target-only DOY field, so this applies uniformly.)
+#   (Restored 2026-08-11 per docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md:
+#   the schema now has separate evidence.expectation/evidence.target
+#   sections, matching the GUI's real two-period shape exactly, instead
+#   of faking "target" by extending each sensor's last_year - see the
+#   evidence: block below.)
 #   Day step size: 3
 #   Modality: unimodal only (NOT constant+unimodal - differs from the
 #     GUI's own out-of-the-box default found earlier in guiBULCD.rtf;
@@ -82,52 +83,62 @@ study_area:
 evidence:
   day_step_size: 3  # user's GUI run used 3, not the legacy default of 4
   # Expectation = baseline year the GUI treated as "normal": 2024 only.
-  # expectation_last_year is EXCLUSIVE (inputs.py builds it as
-  # f"{expectation_last_year}-01-01", same convention as sensor
-  # last_year) - 2025 here means "through end of 2024", not "includes
-  # 2025". Also required to be strictly > first_year by loader.py, so a
-  # single-year baseline can't be written as 2024/2024.
-  expectation_first_year: 2024
-  expectation_last_year: 2025
-  # Target year in the GUI was 2025 (single year, DOY 1-365). Our
-  # continuous-evidence model doesn't have a separate "target" field -
-  # each sensor's evidence window below just needs to EXTEND THROUGH
-  # 2025 so that year's images are in the stream. last_year=2026 because
-  # _date_bounds()'s end-year is EXCLUSIVE (see CLAUDE.md "Two-layer...").
-  # When querying results for "2025 specifically" (interpret.py's
-  # zscore_anomaly_mask_for_year() / disturbance_mask_for_year()), pass
-  # year=2025 explicitly - it's a query parameter at call time, not here.
-  sensors:
-    L8:
-      enabled: true
-      first_year: 2024
-      last_year: 2026
-      first_doy: 74
-      last_doy: 288
-      cloud_cover_threshold: 70
-    L9:
-      enabled: true
-      first_year: 2024
-      last_year: 2026
-      first_doy: 74
-      last_doy: 288
-      cloud_cover_threshold: 70
-    S2:
-      enabled: true
-      first_year: 2024
-      last_year: 2026
-      first_doy: 74
-      last_doy: 288
-      cloud_cover_threshold: 70
-      # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
-      # (a single hardcoded 0.60 threshold), CONFIRMED 2026-08-10 as
-      # production's real, only live S2 cloud-mask path - replaced an
-      # earlier, incorrect s2cloudless implementation. See
-      # bulcd/inputs.py's _mask_s2_clouds().
-    L5:
-      enabled: false
-    S1:
-      enabled: false
+  # last_year is EXCLUSIVE (inputs.py builds it as f"{last_year}-01-01",
+  # same convention as the legacy's year range) - 2025 here means
+  # "through end of 2024", not "includes 2025".
+  expectation:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2024
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      L9:
+        enabled: true
+        first_year: 2024
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      S2:
+        enabled: true
+        first_year: 2024
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+        # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
+        # (a single hardcoded 0.60 threshold), CONFIRMED 2026-08-10 as
+        # production's real, only live S2 cloud-mask path - replaced an
+        # earlier, incorrect s2cloudless implementation. See
+        # bulcd/inputs.py's _mask_s2_clouds().
+  # Target year in the GUI was 2025 (single year, DOY 74-288) - last_year
+  # 2026 because the end-year is EXCLUSIVE.
+  target:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2025
+        last_year: 2026
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      L9:
+        enabled: true
+        first_year: 2025
+        last_year: 2026
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      S2:
+        enabled: true
+        first_year: 2025
+        last_year: 2026
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
 
 reduction:
   band: nbr  # "Value to track: NBR" - matches Willis (2022)'s NBR12 transition matrix

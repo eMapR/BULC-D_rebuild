@@ -2,19 +2,29 @@
 
 Glues the two other new modules together, matching the legacy's real
 split (see legacy/BULCD-Caller-Current.txt): `organize_inputs()`
-(bulcd/inputs.py) produces a continuous z-score stream; this module bins
-that stream and looks each bin up against the hand-tuned "custom
-transition matrix" (Willis 2022 - see CLAUDE.md "Reference papers") to
-build the per-timestep "update factor" images that `bulcd/bulc.py`'s
-generic engine folds through Bayes' formula.
+(bulcd/inputs.py) produces the target period's z-score stream (scored
+against the expectation period's fitted model - the restored
+expectation/target split, docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md);
+this module bins that stream and looks each bin up against the
+hand-tuned "custom transition matrix" (Willis 2022 - see CLAUDE.md
+"Reference papers") to build the per-timestep "update factor" images
+that `bulcd/bulc.py`'s generic engine folds through Bayes' formula. No
+logic here changed with 0010's restoration - this module only ever
+consumed whatever z-score stream `organize_inputs()` handed it, which is
+now typically a short single-season sequence instead of a multi-decade
+one.
 
 VALIDATED against real Earth Engine at four real test pixels AND one
 full-AOI disturbance map - see CLAUDE.md "First live-EE verification" /
 "Known-burn validation" / "Moderate-severity test" / "Major finding:
-long stable baselines can mask real disturbance" / "Disturbance map".
+long stable baselines can mask real disturbance" / "Disturbance map"
+(all under the prior continuous-stream design, docs/decisions/0003, now
+superseded - revalidation against the restored split is still open).
 `run_bulcd()` passes `recency_factor` through to `bulc.run_bulc()` - an
 optional, off-by-default extension beyond the reconstructed classic
-method, added to address a real, empirically-found failure mode - and
+method, added to address a real, empirically-found failure mode of long
+continuous streams that mostly can't occur now that target periods are
+short again (see docs/decisions/0010's consequences) - and
 applies `_water_mask()` to the final output by default (matching the
 legacy's always-on `afn_waterMask()`, whose source we don't have, against
 the standard public JRC Global Surface Water dataset instead), after a

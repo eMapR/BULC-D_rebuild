@@ -1225,3 +1225,59 @@ downstream of these two bugs' systematically wrong "decrease" signal on
 every no-data day. Likely the resolution of this entire investigation
 thread - still only validated at three points, not a full-AOI visual
 comparison against the actual GUI render.
+
+## Expectation/target split restored, and a real cell 8C asset export (2026-08-11)
+
+The user relayed explicit direction from their boss: match the legacy
+GUI's structure as closely as possible, not just its formulas. A
+clarifying question confirmed this means **full structural parity** -
+reversing [decisions/0003](decisions/0003-continuous-evidence-replaces-expectation-target-split.md),
+which had collapsed the legacy's discrete expectation-period/target-period
+comparison into one continuous, indefinite evidence stream (previously
+documented as the modernization's *primary* objective, straight from the
+Vision doc). See [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)
+for the full decision.
+
+Confirmed directly from `legacy/BULCD-InputParameters-v5.txt` (lines
+61-253): `expectationCollectionParameters` and `targetCollectionParameters`
+are two structurally identical per-sensor dictionaries, genuinely
+different between periods in the real example (e.g. L5's
+`CloudCoverThreshold` is 45 in expectation vs. 15 in target).
+`EvidenceConfig` now holds `expectation`/`target`, each a new
+`EvidencePeriodConfig`; `organize_inputs()` fits the harmonic model on
+the expectation collection but scores z-scores over the target
+collection only, restoring the legacy's literal one-shot comparison
+instead of scoring the entire archive. `engine.py`/`bulc.py` needed no
+logic changes - both already just consume whatever z-score stream
+`organize_inputs()` hands them.
+
+Every existing config (`configs/example.yaml`, `configs/cell_8c_comparison.yaml`)
+and every `scripts/debug_*.py`/`export_year_disturbance_map.py` script
+that hardcoded the old flat `EvidenceConfig(sensors=..., expectation_first_year=...)`
+shape was updated to the new two-period shape. `cell_8c_comparison.yaml`'s
+rewrite used the exact real values its own header comments already
+documented (expectation: 2024, target: 2025, both DOY 74-288, cloud 70),
+so it's a mechanical restructuring, not new research. Several debug
+scripts needed a real judgment call about what target window to test
+against now that "extend the evidence window to the present" is no
+longer valid - documented inline in each. `scripts/debug_long_baseline_disturbance.py`'s
+original premise (demonstrating a long-continuous-stream compounding
+failure, [decisions/0005](decisions/0005-recency-weighting-extension.md)'s
+motivating case) is now structurally moot under the restored split and
+was rewritten to test a related but different question instead. All 33
+tests pass after rewriting the config-shape-dependent ones.
+
+**Not yet done, flagged as open follow-ups in decisions/0010:**
+`bulcd/interpret.py`'s `year_of_change()`/`disturbance_mask_for_year()`
+were built to search a long multi-year `classification_stack`, now
+typically just the target period's short single-season Event sequence -
+their semantics haven't been reconsidered for that shape. And this
+session's real GEE export of cell 8C's `final_probabilities`
+(`scripts/export_cell_8c_comparison.py`, task id
+`T7HB4PIODQR5L7H4GGIHEETS`, to
+`projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`)
+was started to enable a real side-by-side asset comparison against the
+GUI's own output, but the classification itself has NOT been
+revalidated against the GUI under the restored split - every prior cell
+8C validation (decisions/0009 and earlier) ran under the old
+continuous-stream design.

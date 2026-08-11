@@ -2,9 +2,9 @@
 #
 # Real-world counterpart: legacy/BULCD-InputParameters-v5.txt (a
 # BULCD-Caller-Parameters/BULCD-InputParameters-v5 file from the
-# `alemlakes/r-2909-BULC-Releases` GEE repo), adapted to one continuous
-# per-sensor evidence window instead of the legacy's separate
-# expectation-period/target-period dictionaries.
+# `alemlakes/r-2909-BULC-Releases` GEE repo) - the evidence: section below
+# restores that file's separate expectation-period/target-period
+# dictionaries exactly (docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md).
 #
 # Loaded via bulcd.config.loader.load_config().
 
@@ -19,47 +19,74 @@ study_area:
 
 evidence:
   day_step_size: 4
-  # Global baseline window for the expectation-model fit (see CLAUDE.md
-  # "Reference papers" / "Design decision: the expectation baseline
-  # window" in the implementation plan) - a deliberate domain choice of
-  # which calendar years count as "normal, undisturbed forest", not
-  # derived from sensor data availability. Applied to the merged,
-  # sensor-agnostic evidence stream regardless of which sensor(s) below
-  # contributed images in this range.
-  expectation_first_year: 2015
-  expectation_last_year: 2017
-  sensors:
-    L8:
-      enabled: true
-      first_year: 2013  # Landsat 8 launch year
-      last_year: null   # null = through most recent available
-      first_doy: 150
-      last_doy: 250
-      cloud_cover_threshold: 20
-    L9:
-      enabled: true
-      first_year: 2021  # Landsat 9 launch year
-      last_year: null
-      first_doy: 150
-      last_doy: 250
-      cloud_cover_threshold: 20
-    S2:
-      enabled: false
-      first_year: 2018
-      last_year: null
-      first_doy: 1
-      last_doy: 365
-      cloud_cover_threshold: 70
-      # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
-      # (a single hardcoded 0.60 threshold, not per-run configurable).
-      # See bulcd/inputs.py's _mask_s2_clouds().
-    S1:
-      enabled: false
-      first_year: 2015
-      last_year: null
-      first_doy: 270
-      last_doy: 360
-      sar_polarization: HV
+  # Expectation period: which years/DOY window count as "normal,
+  # undisturbed forest" the harmonic model is fit against - a deliberate
+  # domain choice, not derived from sensor data availability.
+  expectation:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2015
+        last_year: 2017
+        first_doy: 150
+        last_doy: 250
+        cloud_cover_threshold: 20
+      L9:
+        enabled: false  # not yet launched during this baseline window
+        first_year: 2021
+        last_year: 2023
+        first_doy: 150
+        last_doy: 250
+        cloud_cover_threshold: 20
+      S2:
+        enabled: false
+        first_year: 2018
+        last_year: 2019
+        first_doy: 1
+        last_doy: 365
+        cloud_cover_threshold: 70
+        # No s2_cloud_mask config - cloud masking uses Google Cloud Score+
+        # (a single hardcoded 0.60 threshold, not per-run configurable).
+        # See bulcd/inputs.py's _mask_s2_clouds().
+      S1:
+        enabled: false
+        first_year: 2015
+        last_year: 2016
+        first_doy: 270
+        last_doy: 360
+        sar_polarization: HV
+  # Target period: the years/DOY window compared against the expectation
+  # model's fit.
+  target:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2017
+        last_year: 2018
+        first_doy: 150
+        last_doy: 250
+        cloud_cover_threshold: 20
+      L9:
+        enabled: true
+        first_year: 2021
+        last_year: 2023
+        first_doy: 150
+        last_doy: 250
+        cloud_cover_threshold: 20
+      S2:
+        enabled: false
+        first_year: 2018
+        last_year: 2019
+        first_doy: 1
+        last_doy: 365
+        cloud_cover_threshold: 70
+      S1:
+        enabled: false
+        first_year: 2015
+        last_year: 2016
+        first_doy: 270
+        last_doy: 360
+        sar_polarization: HV
 
 reduction:
   band: swir

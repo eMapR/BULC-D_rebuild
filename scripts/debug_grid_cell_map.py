@@ -40,6 +40,7 @@ from bulcd.config.schema import (
     BULCAdvancedParams,
     BULCDConfig,
     EvidenceConfig,
+    EvidencePeriodConfig,
     ModalityConfig,
     ReductionConfig,
     SensitivityConfig,
@@ -80,27 +81,37 @@ NBR12_TRANSITION_MATRIX = [
 
 config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=AOI),  # mask_water defaults True
+    # Restored expectation/target period split (docs/decisions/0010):
+    # expectation = the same "earliest available stable-looking window"
+    # baseline as before (L5, 2000-2003); target = the most recent
+    # available full growing season (L8, 2023-2024) - "is this cell
+    # currently different from its historical baseline," a single
+    # comparison rather than an indefinite continuous stream.
     evidence=EvidenceConfig(
-        sensors={
-            "L5": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2000,
-                last_year=2012,
-                first_doy=152,  # June 1
-                last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
-                cloud_cover_threshold=40,
-            ),
-            "L8": SensorEvidenceConfig(
-                enabled=True,
-                first_year=2014,
-                last_year=2024,
-                first_doy=152,  # June 1
-                last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
-                cloud_cover_threshold=40,
-            ),
-        },
-        expectation_first_year=2000,
-        expectation_last_year=2003,
+        expectation=EvidencePeriodConfig(
+            sensors={
+                "L5": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2000,
+                    last_year=2003,
+                    first_doy=152,  # June 1
+                    last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
+        target=EvidencePeriodConfig(
+            sensors={
+                "L8": SensorEvidenceConfig(
+                    enabled=True,
+                    first_year=2023,
+                    last_year=2024,
+                    first_doy=152,  # June 1
+                    last_doy=243,  # Aug 31 - narrowed from 273 (Sept 30) per CLAUDE.md snow discussion
+                    cloud_cover_threshold=40,
+                ),
+            }
+        ),
     ),
     reduction=ReductionConfig(band="nbr"),
     modality=ModalityConfig(constant=True, unimodal=True),

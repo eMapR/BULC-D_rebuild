@@ -1,6 +1,12 @@
 # 0003 — Continuous Evidence Stream + Global Expectation Baseline Window (Replaces Legacy's Expectation/Target Split)
 
-**Status:** Decided 2026-07-29
+**Status:** Decided 2026-07-29. **Superseded 2026-08-11 by
+[0010](0010-restore-expectation-target-split-for-gui-parity.md)**, per
+explicit direction that the rebuild should match the legacy GUI's
+structure as closely as possible, not just its formulas. Kept here as the
+historical record of why the continuous-stream design was chosen in the
+first place — the reasoning below no longer reflects the implemented
+schema.
 
 ## Context
 
