@@ -51,14 +51,9 @@ GUI's expected render. See
 [`docs/decisions/0009`](docs/decisions/0009-masking-bugs-resolve-the-classification-gap.md)
 for the full writeup.
 
-**Restored expectation/target period split (2026-08-11).** Explicit
-direction to match the legacy GUI's structure as closely as possible,
-not just its formulas, reversed the earlier "continuous evidence stream"
-design: `EvidenceConfig` now holds separate `expectation`/`target`
-per-sensor periods, and `organize_inputs()` scores z-scores over the
-target period only, restoring the legacy's literal one-shot comparison.
-See [`docs/decisions/0010`](docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md)
-for the full reversal and its consequences.
+As of 2026-08-11, evidence assembly uses separate `expectation`/`target`
+periods (rather than one continuous stream) for closer parity with the
+legacy GUI — see [`docs/decisions/0010`](docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md).
 
 **Platform decision (2026-07-28):** Python + [`earthengine-api`](https://developers.google.com/earth-engine/guides/python_install),
 not GEE JavaScript. The algorithm still runs server-side on Earth Engine
