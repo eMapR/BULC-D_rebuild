@@ -1563,6 +1563,58 @@ inspectable in the GUI Console/Map (e.g. via `RecordIterationNumberAtEachTimeSte
 non-proxy test of hypothesis (b).
 
 This finding likely supersedes the west/east framing as the dominant
-explanation for cell 8C's GUI-vs-rebuild gap. See
+explanation for cell 8C's GUI-vs-rebuild gap.
+
+**2026-08-12: hypothesis (b) resolved - two real bugs found and fixed,
+the second one classification-CHANGING.** The user pulled the GUI's
+real per-pixel Event counter (`perPixelImageCounter`, via the "4a.
+Multiband BULC Return Package" layer's Inspector value) at
+(-121.62455, 46.57266): **37**. This rebuild's own computed count at the
+same pixel: **35** - essentially identical, not the cause by itself. But
+the GUI's actual per-Event z-score time series for the same pixel (via
+the "2c. Target Year: LOF as Z score" layer) has **72 bands**, while
+this rebuild's `lof_zscore` collection only had **61** elements for the
+identical DOY 74-288/day_step_size=3 config - an 11-bin gap. Traced to
+two distinct bugs in `bulcd/inputs.py`:
+
+1. `_bin_evidence_by_day_step()`'s `ee.Join.saveAll()` call was missing
+   `outer=True` - defaults to `outer=False`, which silently drops any
+   bin with zero matched images instead of surviving as the masked
+   placeholder the function's own docstring already claimed. Confirmed
+   via direct reproduction (`outer=False` -> 61 bins, `outer=True` -> 72
+   bins, 11 with zero matches). Fixed, but **classification-INERT** at
+   the test pixel (identical before/after) - a fully-masked step is a
+   true no-op regardless of whether it's present-and-masked or absent,
+   confirmed via `docs/decisions/0009`'s earlier masking work. Kept for
+   structural fidelity (band count now matches production exactly).
+2. **The real cause**: `_landsat_evidence()`/`_s2_evidence()` applied a
+   per-image `ee.Filter.calendarRange(first_doy, last_doy, "day_of_year")`
+   filter the real production source
+   (`legacy/515-gatherCollections27b.txt`) never applies at all (zero
+   grep hits for `calendarRange`/`day_of_year` in that file). Production
+   derives an overall date range from first_doy/last_doy and relies
+   entirely on each day_step_size bin's own `.filterDate(start, end)` to
+   bound the season - confirmed line-for-line identical bin-boundary
+   math to this rebuild's own (`515-gatherCollections27b.txt` lines
+   622-658). Because day_step_size rarely divides the DOY range evenly,
+   that lets the LAST bin's window extend a few days past the nominal
+   last_doy cutoff - production genuinely captures real images in that
+   trailing gap that a strict per-image DOY filter incorrectly excludes.
+   Confirmed directly: a real Sentinel-2 scene on 2025-10-16 (DOY 289,
+   one day past last_doy=288/Oct15) cleared the cloud-cover threshold
+   (61.75% < 70%) but was being silently dropped before ever reaching
+   the last bin's [Oct14, Oct17) window. Removed the filter from both
+   functions.
+
+**Impact at the test pixel: classification FLIPS.** Before:
+`decrease=0.352, unchanged=0.578` (unchanged wins). After:
+`decrease=0.667, unchanged=0.271, increase=0.062` (decrease wins, by a
+wide margin) - matching the direction the GUI's real render showed for
+this broad area. Both fixes verified against real Earth Engine (bin
+count restored to 72) and all 33 existing tests still pass.
+
+Not yet done: re-rendering the full-cell comparison to confirm/quantify
+how much of the broad, cell-wide mismatch this resolves (one pixel's
+flip is strong directional evidence, not proof it generalizes - see
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
-matching entry for the full numbers and thumbnails referenced.
+matching entry for the full numbers and next steps).

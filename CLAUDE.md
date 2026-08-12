@@ -662,12 +662,40 @@ useful context that isn't obvious from the field names alone:
   and its mask-propagation pattern matches `docs/decisions/0009`'s
   already-fixed rebalance-then-merge-onto-prior approach. Both the
   leveler formula and masking mechanism check out against real source —
-  narrows to Event count/ordering/composition specifically, still
-  unidentified. Next concrete step: production tracks a real per-pixel
-  Event counter (`thePerPixelImageCounter`) that may be inspectable in
-  the GUI Console for a direct, non-proxy comparison against this
-  rebuild's own ~34-valid-Events-average. See `docs/decisions/0010`'s
-  matching entry for the full trace.
+  narrows to Event count/ordering/composition specifically.
+
+  **2026-08-12: RESOLVED — two real bugs found and fixed in
+  `bulcd/inputs.py`, one classification-changing.** The user pulled the
+  GUI's real per-pixel Event counter (`perPixelImageCounter`) at a test
+  pixel: 37, vs. this rebuild's own 35 — essentially identical, not the
+  cause. But the GUI's real per-Event z-score layer ("2c. Target Year:
+  LOF as Z score") has **72 bands** for the same DOY 74-288/
+  day_step_size=3 config where this rebuild's `lof_zscore` only had
+  **61**. Two bugs found: (1) `_bin_evidence_by_day_step()`'s
+  `ee.Join.saveAll()` was missing `outer=True` (defaults to `False`,
+  silently dropping zero-match bins instead of keeping them as masked
+  placeholders) — fixed, but classification-**inert** (a masked step is
+  a true no-op either way). (2) **The real cause**:
+  `_landsat_evidence()`/`_s2_evidence()` applied a per-image
+  `ee.Filter.calendarRange(first_doy, last_doy, "day_of_year")` filter
+  that the real production source (`515-gatherCollections27b.txt`)
+  never applies at all (confirmed, zero grep hits) — production only
+  bounds the season via each day_step_size bin's own date window, which
+  (since day_step_size rarely divides the DOY range evenly) lets the
+  LAST bin extend a few days past the nominal cutoff, legitimately
+  capturing real images a strict per-image DOY filter wrongly excludes.
+  Confirmed directly: a real Sentinel-2 scene on 2025-10-16 (DOY 289,
+  one day past last_doy=288) cleared the cloud threshold but was
+  silently dropped. Removed the filter from both functions. **Impact at
+  the test pixel: classification FLIPS** — `decrease` 0.352→0.667,
+  `unchanged` 0.578→0.271 — matching the GUI's actual render direction.
+  Full-cell re-render shows a real, visible increase in scattered
+  `decrease` coverage vs. before the fix, but nowhere near as dense as
+  the `ever_decrease` pattern above — a genuine, additive improvement
+  for pixels affected by the season-boundary gap, not a full explanation
+  of the broad mismatch by itself. Both fixes verified against real
+  Earth Engine (bin count restored to 72) and all 33 tests still pass.
+  See `docs/decisions/0010`'s matching entry for the full trace.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

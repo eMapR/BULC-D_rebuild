@@ -426,3 +426,75 @@ through 2026 so 2025's images would land in the one continuous stream.
   secondary effect (the elevation-correlated z-score bias, still real)
   layered on top of this larger, spatially-broad final-snapshot-vs-
   transient-signal issue.
+
+  **2026-08-12: hypothesis (b) resolved. Two real bugs found and fixed,
+  the second one classification-CHANGING at the test pixel.** The user
+  pulled the GUI's real per-pixel Event counter (`perPixelImageCounter`,
+  via the "4a. Multiband BULC Return Package" layer's Inspector value)
+  at (-121.62455, 46.57266): **37**. This rebuild's own computed count
+  at the exact same pixel: **35** - essentially identical, not the cause
+  by itself. But pulling the GUI's actual z-score time series for the
+  same pixel (via the "2c. Target Year: LOF as Z score" layer, 72 bands)
+  revealed the real divergence: GUI's layer has **72 bands**; this
+  rebuild's `lof_zscore` collection only had **61** elements for the
+  identical DOY 74-288 / day_step_size=3 config - an 11-bin gap. Traced
+  to two distinct causes in `bulcd/inputs.py`:
+
+  1. **`ee.Join.saveAll()` was missing `outer=True`** in
+     `_bin_evidence_by_day_step()` - it defaults to `outer=False`, which
+     silently DROPS any bin with zero matched raw images from the joined
+     FeatureCollection entirely, instead of surviving as the fully-masked
+     placeholder the function's own docstring already claimed it would
+     become. Confirmed via direct EE reproduction (`outer=False` → 61
+     bins; `outer=True` → 72 bins, with exactly 11 bins having zero
+     matches). Fixed. **Classification-INERT at the test pixel**
+     (identical `final_probabilities` before/after,
+     `decrease=0.352/0.352`) - expected, since a fully-masked step is a
+     true no-op in the Bayesian fold (confirmed via `docs/decisions/0009`)
+     regardless of whether it's present-and-masked or absent from the
+     sequence. Kept anyway for structural fidelity to production (band
+     count/shape now matches exactly) and because it was a genuine,
+     confirmed bug even though inert here.
+  2. **The real cause: `_landsat_evidence()`/`_s2_evidence()` applied a
+     per-image `ee.Filter.calendarRange(first_doy, last_doy, "day_of_year")`
+     filter that production's real source
+     (`legacy/515-gatherCollections27b.txt`) never applies at all**
+     (confirmed by grepping that file for `calendarRange`/`day_of_year`
+     - zero hits). Production instead derives an overall date range from
+     `first_doy`/`last_doy` (converted to month/day) and relies
+     entirely on each `day_step_size` bin's own `.filterDate(start, end)`
+     to bound the season (`afn_nestedYear`/`afn_nestedDay`,
+     `515-gatherCollections27b.txt` lines 622-658 - confirmed
+     line-for-line identical bin-boundary math to this rebuild's
+     `_bin_starts_for_year()`/`_bin_feature()`). Because `day_step_size`
+     rarely divides the DOY range evenly, that bin-based approach lets
+     the LAST bin's window extend a few days past the nominal
+     `last_doy` cutoff - production genuinely captures real images in
+     that trailing gap that a strict per-image `calendarRange` filter
+     incorrectly excludes. Confirmed directly for cell 8C: a real
+     Sentinel-2 scene on 2025-10-16 (DOY 289, one day past
+     `last_doy=288`/Oct15) cleared the cloud-cover threshold (61.75% <
+     70%) but was being silently dropped before ever reaching the last
+     bin's `[Oct14, Oct17)` window - exactly the kind of real,
+     late-season disturbance-indicating evidence this rebuild was
+     missing relative to the GUI. Removed the filter entirely from both
+     functions (safe: `_bin_evidence_by_day_step()`'s per-bin date join
+     still naturally excludes any image whose date doesn't fall within
+     the derived `[seasonStart, lastBinEnd)` range - no bin exists for
+     it to match).
+
+  **Impact at the test pixel: classification FLIPS.** Before this fix:
+  `decrease=0.352, unchanged=0.578` (unchanged wins). After: `decrease=0.667,
+  unchanged=0.271, increase=0.062` (decrease wins, by a wide margin) -
+  matching the direction the GUI's real render showed for this broad
+  area. Both fixes verified against real Earth Engine (bin count
+  restored to 72, matching GUI's real layer exactly) and all 33 existing
+  tests still pass.
+
+  **Not yet done:** re-rendering the full-cell `ever_decrease`/
+  `final_decrease` comparison and the original `subtract()` diff with
+  this fix applied, to confirm/quantify how much of the BROAD,
+  cell-wide mismatch (not just this one pixel) this resolves. One
+  pixel's flip is strong, directional evidence but not proof the fix
+  generalizes - late-season data availability could plausibly vary
+  pixel-to-pixel depending on cloud cover that specific week.

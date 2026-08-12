@@ -207,11 +207,14 @@ def _landsat_evidence(
     band_map = _LANDSAT_BAND_MAP[sensor_code]
     cloud_mask_fn = _LANDSAT_CLOUD_MASK_FN[sensor_code]
 
+    # No per-image calendarRange(first_doy, last_doy) filter here - see
+    # _s2_evidence()'s matching comment below for why this was removed
+    # 2026-08-12 (confirmed against the real 515-gatherCollections27b
+    # source, which never applies one either).
     collection = (
         ee.ImageCollection(_LANDSAT_COLLECTION_ID[sensor_code])
         .filterBounds(study_area)
         .filterDate(start, end)
-        .filter(ee.Filter.calendarRange(cfg.first_doy, cfg.last_doy, "day_of_year"))
         .filter(ee.Filter.lt("CLOUD_COVER", cfg.cloud_cover_threshold))
     )
 
@@ -249,11 +252,34 @@ def _scale_s2_sr(image: ee.Image) -> ee.Image:
 def _s2_evidence(cfg: SensorEvidenceConfig, study_area: ee.Geometry, band: str) -> ee.ImageCollection:
     start, end = _date_bounds("S2", cfg)
 
+    # No per-image calendarRange(first_doy, last_doy) filter here -
+    # REMOVED 2026-08-12 (was present in both this function and
+    # _landsat_evidence() above since this module's first version).
+    # Confirmed a real, consequential bug via a live GUI-vs-rebuild
+    # comparison: the real production source (515-gatherCollections27b)
+    # never applies a per-image DOY filter at all anywhere - it only
+    # derives an overall date range from first_doy/last_doy (converted
+    # to month/day) and relies on each day_step_size bin's own
+    # .filterDate(start, end) to implicitly bound the season. Because
+    # day_step_size rarely divides the DOY range evenly, that bin-based
+    # approach naturally lets the LAST bin's window extend a few days
+    # past the nominal last_doy cutoff - so production genuinely
+    # includes real images in that trailing gap that a strict per-image
+    # calendarRange filter (what this function used to have) would
+    # incorrectly exclude. Confirmed directly for cell 8C: a real
+    # Sentinel-2 scene on 2025-10-16 (DOY 289, one day past
+    # last_doy=288/Oct15) cleared the cloud-cover threshold but was
+    # being silently dropped by calendarRange before ever reaching the
+    # last day_step_size bin's [Oct14, Oct17) window - exactly the kind
+    # of real, late-season disturbance-indicating evidence this rebuild
+    # was missing relative to the GUI. Removing the filter here is safe:
+    # _bin_evidence_by_day_step()'s per-bin date join still naturally
+    # excludes any image whose date doesn't fall within the derived
+    # [seasonStart, lastBinEnd) range - no bin exists for it to match.
     sr_collection = (
         ee.ImageCollection(_S2_SR_COLLECTION_ID)
         .filterBounds(study_area)
         .filterDate(start, end)
-        .filter(ee.Filter.calendarRange(cfg.first_doy, cfg.last_doy, "day_of_year"))
         .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cfg.cloud_cover_threshold))
     )
     # .linkCollection() matches production's own real code
@@ -366,7 +392,19 @@ def _bin_evidence_by_day_step(
         ee.Filter.lessThanOrEquals(leftField="start", rightField="system:time_start"),
         ee.Filter.greaterThan(leftField="end", rightField="system:time_start"),
     )
-    joined = ee.Join.saveAll(matchesKey="images").apply(bins, collection, time_filter)
+    # outer=True is required: ee.Join.saveAll() defaults to outer=False,
+    # which silently DROPS any bin (primary feature) with zero matching
+    # images from the joined FeatureCollection entirely - discovered
+    # 2026-08-12 when a bin count of 61 (this function's actual prior
+    # output) didn't match the 72 bins the same DOY/day_step_size
+    # parameters produce in the real GUI (confirmed via a real per-pixel
+    # Console inspection of the GUI's own z-score layer, which has 72
+    # bands). Without outer=True, a bin with no real images never even
+    # reaches _bin_image() below, so the placeholder-union logic in that
+    # function (which exists specifically to keep the band count/shape
+    # consistent for genuinely empty bins) never got a chance to run for
+    # these bins - they vanished instead of becoming a masked placeholder.
+    joined = ee.Join.saveAll(matchesKey="images", outer=True).apply(bins, collection, time_filter)
 
     def _bin_image(bin_feature: ee.Feature) -> ee.Image:
         bin_feature = ee.Feature(bin_feature)
