@@ -1624,7 +1624,19 @@ User loaded the new asset in the real GUI for a direct visual comparison
 against the GUI's own render - the same method that first found the
 diagonal gap. Verdict: "much closer!" Real-world confirmation beyond the
 single test pixel - the `calendarRange` DOY-filter bug was a genuine,
-broadly-impactful cause of the mismatch. Not yet done: a fresh
-`subtract()` diff to quantify the residual gap. See
+broadly-impactful cause of the mismatch.
+
+**Side-by-side screenshot, 2026-08-12: specifics of the match.** Same
+Paradise/Longmire region, same RGB convention, rebuild vs. GUI post-fix.
+The known discrete features (center disturbance cluster, Longmire
+valley corridor string, lower-right diagonal cluster) all matched
+closely, as in every prior comparison. But the upper-right/north diffuse
+red mottling - the single most visually obvious gap in every PRE-fix
+comparison in this investigation, and the original reason the west/east
+framing existed - is now present in the rebuild at essentially the same
+density and distribution as the GUI. This is the clearest evidence yet
+that the DOY-filter fix addressed the actual dominant cause of the
+mismatch, not just a contributing factor. Not yet done: a fresh
+`subtract()` diff to quantify how small the residual gap now is. See
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
 matching entry for the full numbers and next steps.

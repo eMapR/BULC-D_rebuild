@@ -504,9 +504,30 @@ through 2026 so 2025's images would land in the one continuous stream.
   `calendarRange` DOY-filter bug was a genuine, broadly-impactful cause
   of the GUI-vs-rebuild mismatch, not just a one-pixel artifact.
 
+  **Side-by-side screenshot provided 2026-08-12 - specifics of the
+  match.** Same region as every earlier cell 8C comparison (Paradise/
+  Longmire area, Mount Rainier), same RGB convention
+  (R=decrease/G=unchanged/B=increase) over the same map background.
+  Rebuild (left) vs. GUI (right), post-fix:
+  - The dense red/blue cluster north of the small lake (the known real
+    disturbance feature every prior comparison already matched):
+    matches closely, same size/shape/density.
+  - The diagonal red string along the Longmire/Highway 12 valley
+    corridor (lower-left): matches closely.
+  - The diagonal red cluster in the lower-right corner: matches closely.
+  - **The upper-right/north diffuse red mottling - the single most
+    visually obvious gap in every PRE-fix comparison in this
+    investigation (called out in the original "Revalidated 2026-08-11"
+    entry above, and the reason the west/east framing existed at all) -
+    is now present in the rebuild at essentially the same density and
+    distribution as the GUI.** This is the clearest, most direct
+    evidence yet that the `calendarRange` DOY-filter fix addressed the
+    actual dominant cause of the original mismatch, not just a
+    contributing factor.
+
   Not yet done: a fresh `gui_image.subtract(rebuild_image)` diff with
   the new asset, the same way the original gap was first quantified, to
-  measure exactly how much residual gap (if any) remains and whether
-  it's still diagonal/spatially patterned or now more like scattered
-  noise. The user's qualitative "much closer" is strong confirmation but
-  not yet a quantified before/after comparison.
+  measure exactly how small the residual gap now is and whether any
+  remaining difference has structure worth chasing or is down to
+  scattered noise. The visual match is very strong but not yet
+  pixel-quantified.

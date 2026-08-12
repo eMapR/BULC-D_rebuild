@@ -700,9 +700,14 @@ useful context that isn't obvious from the field names alone:
   task `X6FTZKHMKKEQMYVAYCNE4WHD`) with both fixes applied; user's
   direct visual comparison against the real GUI in the Code Editor:
   "much closer!" — confirms the fix generalizes beyond the single test
-  pixel. A fresh quantified `subtract()` diff against the GUI is the
-  natural next step to measure the residual gap precisely. See
-  `docs/decisions/0010`'s matching entry for the full trace.
+  pixel. A follow-up side-by-side screenshot confirmed the specifics:
+  the upper-right/north diffuse red mottling that was the single most
+  visually obvious gap in every pre-fix comparison (and the original
+  reason the west/east framing existed at all) now matches the GUI's
+  density and distribution closely, alongside the previously-matching
+  discrete features. A fresh quantified `subtract()` diff against the
+  GUI is the natural next step to measure the residual gap precisely.
+  See `docs/decisions/0010`'s matching entry for the full trace.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in
