@@ -118,10 +118,130 @@ through 2026 so 2025's images would land in the one continuous stream.
   were rewritten to instead test "does a one-shot comparison spanning the
   known disturbance date detect it," a related but genuinely different
   question.
-- **Not yet done:** revalidating `configs/cell_8c_comparison.yaml`
-  against the real GUI's Console output under the restored split. Every
-  prior cell-8C validation (`docs/decisions/0009` and earlier) was run
-  against the continuous-stream design; the restructured config uses the
-  same real parameter values, but the actual classification output
-  hasn't been re-checked against a live Earth Engine run since this
-  change landed.
+- **Revalidated 2026-08-11 with side-by-side renders AND a computed diff
+  image, not a perfect match — a spatially coherent gap, not just
+  noise.** The user compared `scripts/export_cell_8c_comparison.py`'s
+  real asset output against the legacy GUI's actual render for cell 8C
+  (both R=decrease/G=unchanged/B=increase RGB thumbnails, same region,
+  same map background), then computed `gui_image.subtract(rebuild_image)`
+  in GEE and rendered that difference with the same RGB convention.
+  Eyeballing the two renders side by side, the large, contiguous,
+  geographically obvious disturbance features — a dense red/blue cluster
+  in the center-north of the cell, and a diagonal red string following a
+  valley/road corridor near Longmire — line up closely: same locations,
+  same rough shapes, and the rebuild's `unchanged` regions looked mostly
+  clean with scattered red flecking.
+
+  **The subtract() image told a different, more complete story:** a
+  large-scale, roughly diagonal, spatially COHERENT split, not
+  scattered noise — the west/upper-left portion of the cell is
+  strongly red (GUI's `decrease` band exceeds the rebuild's there by a
+  wide margin), the east/lower-right portion is strongly dark blue/navy
+  (GUI's `increase` band exceeds the rebuild's), and the valley/road
+  corridor near Longmire shows green (GUI's `unchanged` exceeds the
+  rebuild's slightly there, consistent with both renders agreeing that
+  corridor is disturbed). In plain terms: the GUI is calling substantially
+  more `decrease` on the west side and more `increase` on the east side
+  than the rebuild does, across large contiguous areas — not just
+  isolated speckle. **Caveat on this specific diff render:** a raw
+  `subtract()` with no `abs()` only shows where the GUI's per-band value
+  exceeds the rebuild's (positive difference) — pixels where the rebuild
+  scored HIGHER than the GUI in a band render as black, indistinguishable
+  from true agreement, so this image likely under-represents total
+  disagreement and only shows one direction of it.
+
+  This is NOT attributable to a known placeholder: all three levelers
+  (`dampening_factor`/`posterior_leveler`/`initializing_leveler`) in
+  `configs/cell_8c_comparison.yaml` are confirmed real production values
+  (see that config's own header comments), not approximations. The
+  diagonal shape of the split roughly tracks the cell's own tilted
+  (Landsat-swath-like) orientation, which is suggestive but NOT confirmed
+  as causal.
+
+  **Hypothesis (a) — per-sensor coverage/tiling boundary — RULED OUT
+  2026-08-11.** `scripts/debug_cell_8c_sensor_coverage.py` (new) built a
+  target-period-only, single-sensor `EvidencePeriodConfig` for each of
+  L8/L9/S2 via the real `assemble_evidence_collection()`, counted valid
+  day_step_size-bin observations per pixel, and rendered an RGB composite
+  (R=L8, G=L9, B=S2 counts). Whole-cell means: L8 ≈ 11.4, L9 ≈ 12.9, S2 ≈
+  26.7 valid bins (S2's higher revisit rate, as expected) — but
+  spatially, the composite showed a mottled, semi-uniform pattern (S2
+  dominant almost everywhere, scattered patchiness) with no boundary
+  lining up with the diff's diagonal split. Sensor coverage is not the
+  cause.
+
+  Remaining, still-unconfirmed candidates at the time: (b) a real
+  geographic/land-management gradient (e.g. Mount Rainier NP boundary
+  near Longmire vs. more actively managed land to the west) that both
+  GUI and rebuild partially detect but weight differently — not a bug, a
+  sensitivity difference; (c) snow/phenology contamination correlated
+  with elevation, given the wide DOY 74–288 window and Rainier's
+  elevation gradient; (d) some other still-unconfirmed formula/parameter
+  difference that happens to manifest as a regional bias rather than a
+  uniform shift.
+
+  **Hypothesis (c) — snow/phenology contamination correlated with
+  elevation — PARTIALLY SUPPORTED 2026-08-12, and explains the EAST half
+  of the gap specifically, not the whole thing.**
+  `scripts/debug_cell_8c_expectation_fit_quality.py` (new) called
+  `organize_inputs()` directly (real, unchanged) and rendered
+  `expectation_r2`, `expectation_residual_stddev`, and the target
+  period's mean z-score spatially, plus elevation/aspect from
+  `USGS/SRTMGL1_003`, all over the same cell 8C region — then compared
+  west-half vs. east-half means (split at the AOI's own longitude
+  median) and inspected the rendered thumbnails directly.
+
+  Numbers (west / east):
+  - `expectation_r2`: 0.360 / 0.397 — no meaningful difference.
+  - `expectation_residual_stddev`: 0.054 / 0.073 — east ~35% noisier.
+  - mean target-period z-score: −0.032 / −0.138 — both negative (the
+    rebuild's own fit skews slightly "decrease"-leaning cell-wide), but
+    the east is ~4× more negative than the west.
+  - elevation: 1012m / 1326m — east is real, substantially higher
+    terrain (~30%), confirmed by the rendered DEM thumbnail showing a
+    branching valley/ridge system, not just two flat aggregate numbers.
+  - aspect: 174° / 187° — both south-facing, essentially identical; NOT
+    a differentiator.
+
+  The rendered `mean_zscore` thumbnail shows this isn't just an artifact
+  of the west/east split point — the right two-thirds of the cell is
+  visibly, coherently blue (negative z-score) while the left third is
+  closer to neutral/faint red, consistent with the numeric gap. **This
+  directly explains the EAST side of the original GUI-vs-rebuild diff**:
+  a more negative z-score there pushes the rebuild's own classification
+  toward `decrease` and away from `increase`, which is exactly the
+  direction of the GUI-minus-rebuild diff on the east side (GUI scores
+  more `increase` there than the rebuild does — i.e. the rebuild is
+  under-calling `increase` in the east, and a real negative z-score bias
+  in the rebuild's own output is a sufficient, demonstrated cause).
+
+  **It does NOT explain the WEST side.** There, the rebuild's own mean
+  z-score is close to neutral (−0.032, not positive), so there's no
+  comparable bias pushing the rebuild away from `decrease` — the rebuild
+  simply isn't detecting as strong a `decrease` signal in the west as
+  the GUI apparently does. This is a different, still-open question:
+  either a real sensitivity/scale difference from something not yet
+  identified, or the GUI's own expectation fit (unknown internals —
+  possibly a wider/multi-year baseline, unlike this comparison's
+  deliberately single-year 2024 window) picks up a real west-side
+  disturbance signal this rebuild's fit misses entirely, not just
+  under-weights.
+
+  Correlationally, higher elevation lining up with both higher
+  `residual_stddev` and a more negative z-score bias in the same region
+  is consistent with hypothesis (c)'s snow/phenology mechanism (fitting
+  a single-year, partial-DOY-window — 74–288, not a full calendar year —
+  harmonic model is inherently more exposed to a bad early/late-season
+  snow read at higher elevation, which would bias both the fit's
+  residual spread and, if the 2025 target period's early-DOY images
+  happened to have different snow timing than 2024's, the resulting
+  z-score). This is real, aligned evidence, not proof of the underlying
+  mechanism — worth stating precisely: elevation correlating with the
+  z-score bias is confirmed; snow/phenology as the specific physical
+  cause of that correlation is a plausible, unconfirmed mechanism.
+
+  Treat cell 8C as: the EAST-side portion of the diagonal gap has a
+  real, demonstrated cause inside this rebuild's own math (an
+  elevation-correlated negative z-score bias); the WEST-side portion
+  remains open, and is not sensor coverage, not a leveler placeholder,
+  and not (by itself) the same z-score-bias mechanism.

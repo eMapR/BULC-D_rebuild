@@ -611,12 +611,29 @@ useful context that isn't obvious from the field names alone:
   what was and wasn't verified in that run, and an open, unresolved
   question about asset-listing calls not finding successfully-exported
   assets) and `scripts/export_cell_8c_comparison.py` (new 2026-08-11,
-  see `docs/findings.md`'s "Expectation/target split restored..." entry —
-  exports cell 8C's `final_probabilities` to
-  `projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`
-  for a real asset-level comparison against the GUI's own render; started
-  but classification not yet revalidated against the GUI under the
-  restored split).
+  see `docs/findings.md`'s "Revalidated 2026-08-11 against the real
+  GUI..." entry — exports cell 8C's `final_probabilities` to
+  `projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`.
+  Compared by the user against the real GUI's render, plus a
+  `gui_image.subtract(rebuild_image)` diff: large discrete disturbance
+  features visually match, but the diff revealed a large-scale, roughly
+  diagonal, spatially COHERENT gap across most of the cell (GUI scores
+  higher `decrease` on the west side, higher `increase` on the east) —
+  not just noise, and not attributable to a known placeholder (all three
+  levelers are confirmed real production values). Sensor-coverage
+  boundary hypothesis RULED OUT 2026-08-11
+  (`scripts/debug_cell_8c_sensor_coverage.py`). Elevation-correlated
+  z-score bias hypothesis PARTIALLY SUPPORTED 2026-08-12
+  (`scripts/debug_cell_8c_expectation_fit_quality.py`, see
+  `docs/decisions/0010`'s matching entry for full numbers): the rebuild's
+  own target-period z-score is real and measurably more negative
+  (`decrease`-leaning) in the cell's higher-elevation east half
+  (mean −0.138 vs. −0.032 west, elevation 1326m vs. 1012m), which is a
+  sufficient, demonstrated cause for the EAST side of the diff
+  specifically (rebuild under-calling `increase` there). Does NOT explain
+  the WEST side (rebuild under-calling `decrease` there) — the rebuild's
+  own z-score is near-neutral in the west, so nothing in this mechanism
+  suppresses `decrease` there; still an open follow-up).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

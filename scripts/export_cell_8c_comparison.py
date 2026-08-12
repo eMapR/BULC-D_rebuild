@@ -13,10 +13,14 @@ runs the full BULC-D pipeline, and exports the 3-band
 the GUI's own rendered output in the Code Editor, not just a thumbnail
 preview.
 
-KNOWN, DELIBERATE APPROXIMATION (same caveat as
-`scripts/run_cell_8c_comparison.py`): `bulc_advanced_params.dampening_factor`
-in that config is still `bulc.py`'s single-scalar placeholder, not
-production's real three-leveler mechanism.
+All three levelers (`dampening_factor`/`posterior_leveler`/
+`initializing_leveler`) in the config are the real matched production
+values (confirmed 2026-08-10 against `BULC-Minimal-Module-107` - see
+that config's own header comments), not placeholders. Comparison against
+the real GUI under the restored expectation/target split found the
+outputs close but not identical - see
+`docs/decisions/0010-restore-expectation-target-split-for-gui-parity.md`'s
+"Revalidated 2026-08-11" note; the remaining gap's cause is unidentified.
 
 Usage:
     conda run -n bulcd python scripts/export_cell_8c_comparison.py
@@ -38,11 +42,6 @@ ASSET_ID = "projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_p
 
 config = load_config(CONFIG_PATH)
 print(f"Loaded {CONFIG_PATH}")
-print(
-    "NOTE: dampening_factor is a known placeholder "
-    f"({config.bulc_advanced_params.dampening_factor}) - not yet matched "
-    "to production's real leveler mechanism. See CLAUDE.md."
-)
 
 result = engine.run_bulcd(config)
 region = ee.Geometry.Polygon([config.study_area.aoi_coordinates])
