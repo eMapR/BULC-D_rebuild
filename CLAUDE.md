@@ -695,7 +695,14 @@ useful context that isn't obvious from the field names alone:
   for pixels affected by the season-boundary gap, not a full explanation
   of the broad mismatch by itself. Both fixes verified against real
   Earth Engine (bin count restored to 72) and all 33 tests still pass.
-  See `docs/decisions/0010`'s matching entry for the full trace.
+  **Real-world confirmation same day**: re-exported the asset
+  (`projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`,
+  task `X6FTZKHMKKEQMYVAYCNE4WHD`) with both fixes applied; user's
+  direct visual comparison against the real GUI in the Code Editor:
+  "much closer!" — confirms the fix generalizes beyond the single test
+  pixel. A fresh quantified `subtract()` diff against the GUI is the
+  natural next step to measure the residual gap precisely. See
+  `docs/decisions/0010`'s matching entry for the full trace.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

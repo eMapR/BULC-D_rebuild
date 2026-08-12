@@ -491,10 +491,22 @@ through 2026 so 2025's images would land in the one continuous stream.
   restored to 72, matching GUI's real layer exactly) and all 33 existing
   tests still pass.
 
-  **Not yet done:** re-rendering the full-cell `ever_decrease`/
-  `final_decrease` comparison and the original `subtract()` diff with
-  this fix applied, to confirm/quantify how much of the BROAD,
-  cell-wide mismatch (not just this one pixel) this resolves. One
-  pixel's flip is strong, directional evidence but not proof the fix
-  generalizes - late-season data availability could plausibly vary
-  pixel-to-pixel depending on cloud cover that specific week.
+  **Real-world confirmation, 2026-08-12: the fix generalizes.** Deleted
+  the stale pre-fix asset at
+  `projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`
+  and re-ran `scripts/export_cell_8c_comparison.py` with both fixes
+  applied (task `X6FTZKHMKKEQMYVAYCNE4WHD`, completed in ~12 minutes).
+  The user loaded the new asset in the real GUI's Code Editor for a
+  direct visual comparison against the GUI's own render, the same way
+  the original diagonal-gap finding was discovered - user's verdict:
+  "much closer!" This is real-world confirmation beyond the single test
+  pixel and the two-thumbnail full-cell comparison above - the
+  `calendarRange` DOY-filter bug was a genuine, broadly-impactful cause
+  of the GUI-vs-rebuild mismatch, not just a one-pixel artifact.
+
+  Not yet done: a fresh `gui_image.subtract(rebuild_image)` diff with
+  the new asset, the same way the original gap was first quantified, to
+  measure exactly how much residual gap (if any) remains and whether
+  it's still diagonal/spatially patterned or now more like scattered
+  noise. The user's qualitative "much closer" is strong confirmation but
+  not yet a quantified before/after comparison.

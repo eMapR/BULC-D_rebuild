@@ -1615,6 +1615,16 @@ count restored to 72) and all 33 existing tests still pass.
 
 Not yet done: re-rendering the full-cell comparison to confirm/quantify
 how much of the broad, cell-wide mismatch this resolves (one pixel's
-flip is strong directional evidence, not proof it generalizes - see
+flip is strong directional evidence, not proof it generalizes.
+
+**Real-world confirmation, 2026-08-12: the fix generalizes.** Deleted
+the stale pre-fix asset and re-ran `scripts/export_cell_8c_comparison.py`
+with both fixes applied (task `X6FTZKHMKKEQMYVAYCNE4WHD`, ~12 minutes).
+User loaded the new asset in the real GUI for a direct visual comparison
+against the GUI's own render - the same method that first found the
+diagonal gap. Verdict: "much closer!" Real-world confirmation beyond the
+single test pixel - the `calendarRange` DOY-filter bug was a genuine,
+broadly-impactful cause of the mismatch. Not yet done: a fresh
+`subtract()` diff to quantify the residual gap. See
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
-matching entry for the full numbers and next steps).
+matching entry for the full numbers and next steps.
