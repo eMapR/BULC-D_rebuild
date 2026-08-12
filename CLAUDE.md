@@ -646,14 +646,28 @@ useful context that isn't obvious from the field names alone:
   survives to the end, so genuine mid-sequence disturbance gets smoothed
   away by the time the sequence's last Event is reached. This is a
   spatially broad effect, matching the actual observed mismatch far
-  better than any west/east hypothesis did. Open question: GUI's own
-  render, using the same confirmed leveler math, should show similar
-  washing-out — but visibly doesn't. Either the GUI's displayed image
-  isn't literally "state after the single last Event" the way
-  `final_probabilities` is (a definitional mismatch), or this rebuild's
-  Event count/ordering differs from production's real per-step process
-  in some unconfirmed way. Not yet resolved — see `docs/decisions/0010`'s
-  matching entry.
+  better than any west/east hypothesis did.
+
+  **Definitional-mismatch branch RULED OUT 2026-08-12** via direct
+  source trace: the user provided the GUI's real export-layer name
+  (`Version-V53e-4-Final-BULC-Probabilities`), which traces
+  (`guiBULCD.rtf` line 7212) to `fullBULCReturn.finalBULCprobs`, defined
+  in the already-fetched `legacy/BULC-Minimal-Module-107.txt` (line
+  1220) as the array band holding the RUNNING posterior at the end of
+  the real `.iterate()` fold (line 1079) — genuinely the same
+  "state-after-last-Event" concept as `final_probabilities`, not a
+  different summary. Re-checked the real per-step function
+  (`afn_hiddenBULCIterateWithOptions`) at the same time:
+  `afn_dayIRebalancingV3`'s formula (line 124-127) is `dampen()` exactly,
+  and its mask-propagation pattern matches `docs/decisions/0009`'s
+  already-fixed rebalance-then-merge-onto-prior approach. Both the
+  leveler formula and masking mechanism check out against real source —
+  narrows to Event count/ordering/composition specifically, still
+  unidentified. Next concrete step: production tracks a real per-pixel
+  Event counter (`thePerPixelImageCounter`) that may be inspectable in
+  the GUI Console for a direct, non-proxy comparison against this
+  rebuild's own ~34-valid-Events-average. See `docs/decisions/0010`'s
+  matching entry for the full trace.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

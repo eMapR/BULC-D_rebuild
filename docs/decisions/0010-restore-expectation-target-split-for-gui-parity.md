@@ -372,6 +372,53 @@ through 2026 so 2025's images would land in the one continuous stream.
   usage, "final" does appear to mean the same single-snapshot concept on
   both sides - which points toward (b), but this is not confirmed.
 
+  **(a) RULED OUT 2026-08-12 via direct source trace - it's confirmed
+  (b), not a definitional mismatch.** The user provided the GUI's real
+  export-layer name, `Version-V53e-4-Final-BULC-Probabilities`, which
+  traces (`guiBULCD.rtf` line 7212-7213) to `ee.Image(fullBULCReturn.finalBULCprobs)`.
+  `finalBULCprobs` itself is defined in the real, already-fetched
+  `legacy/BULC-Minimal-Module-107.txt` (line 1220):
+  `theBoundIterate.select(0).arrayFlatten([classNameList])` -
+  `theBoundIterate` is the direct result of
+  `eventsAsImageCollection.iterate(afn_BULCbinding, accumulatingAnswer)`
+  (line 1079), and `finalBULCprobs` pulls the array band holding the
+  RUNNING posterior at the end of that same fold - i.e. genuinely the
+  same "state after the last Event" concept as this rebuild's
+  `final_probabilities`, not some different accumulated/summary
+  quantity. Re-checked the actual per-step function
+  (`afn_hiddenBULCIterateWithOptions`, line 496) against `bulc.py` at
+  the same time: `afn_dayIRebalancingV3(x, balanceFactor, minimumProbToAdd)
+  = x.multiply(balanceFactor).add(minimumProbToAdd)` (line 124-127) is
+  `dampen()`'s exact formula, confirmed identical; the mask-propagation
+  pattern (`currentProbs.mask(oneEventValidValues)` → dampen →
+  `currentProbs.where(oneEventValidValues, posterior)`, lines 590-600)
+  is structurally the same rebalance-then-merge-onto-prior approach
+  `docs/decisions/0009` already fixed and confirmed matches. So both the
+  leveler formula and the masking mechanism check out against the real
+  source - the divergence is narrowed to (b) specifically: something
+  about the actual Event sequence (count, ordering, or composition) this
+  rebuild folds through differs from what production's real run
+  actually processed for cell 8C, not yet identified or cross-checked
+  against a real per-pixel ground truth.
+
+  Loose thread noticed but not yet chased: `afn_hiddenBULCIterateWithOptions`
+  line 501-505 sets `oneEventValidValues = oneEvent` directly with a
+  comment "hack assuming all values are valid," and the real per-pixel
+  validity function (`afn_findValidValues(oneEvent)`) is commented out
+  in this "Minimal" module. This doesn't appear to change the mask-
+  propagation story (the downstream `.mask()`/`.where()` calls still key
+  off `oneEvent`'s own natural EE mask either way), but is flagged in
+  case it matters for a subtlety not yet understood.
+
+  **Next concrete step:** production's own per-step function tracks a
+  real per-pixel Event counter (`thePerPixelImageCounter`,
+  line 520/538) that increments once per valid (unmasked) Event at that
+  pixel - if this is inspectable in the GUI Console/Map for a specific
+  pixel (e.g. via `RecordIterationNumberAtEachTimeStep`'s `"iter"` band,
+  or a similar exposed counter), comparing that real number against this
+  rebuild's own computed ~34-valid-Events-average for the same pixel
+  would be a direct, hard test of hypothesis (b) - not another proxy.
+
   This finding likely supersedes the west/east framing as the dominant
   explanation for cell 8C's GUI-vs-rebuild gap. The west/east-specific
   hypotheses above remain individually correct (each really was ruled
