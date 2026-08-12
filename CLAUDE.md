@@ -633,7 +633,15 @@ useful context that isn't obvious from the field names alone:
   specifically (rebuild under-calling `increase` there). Does NOT explain
   the WEST side (rebuild under-calling `decrease` there) — the rebuild's
   own z-score is near-neutral in the west, so nothing in this mechanism
-  suppresses `decrease` there; still an open follow-up).
+  suppresses `decrease` there; still an open follow-up. "GUI defaults to
+  a wider/multi-year expectation baseline" candidate RULED OUT
+  2026-08-12: `guiBULCD.rtf`'s Expectation Period widget (both per-sensor
+  tabs and the Cross-Sensors panel actually used for this run) is a bank
+  of year checkboxes that all default unchecked, `chosen = []` — there
+  is no built-in default at all, and the real cell 8C run's actual
+  selection (single year, 2024, read from the GUI's own Console output)
+  is already what `configs/cell_8c_comparison.yaml` uses. West-side cause
+  still unidentified).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

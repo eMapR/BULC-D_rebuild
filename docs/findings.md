@@ -1381,12 +1381,27 @@ under-calling `increase` there).
 there is close to neutral (-0.032, not positive), so there's no
 comparable bias pushing the rebuild away from `decrease` - the rebuild
 simply isn't detecting as strong a `decrease` signal in the west as the
-GUI apparently does. Still open: either a real sensitivity/scale
-difference not yet identified, or the GUI's own expectation fit (unknown
-internals - possibly a wider/multi-year baseline, unlike this
-comparison's deliberately single-year 2024 window) picks up a real
-west-side disturbance signal this rebuild's fit misses entirely, not
-just under-weights.
+GUI apparently does. Still open as of this entry.
+
+**"Wider/multi-year GUI expectation baseline" candidate - RULED OUT
+2026-08-12.** Checked `guiBULCD.rtf` directly for what the Expectation
+Period widget actually defaults to (both the per-sensor tabs, e.g.
+`l8years_t` ~line 2948, and the "Cross-Sensors" panel actually used for
+cell 8C's real run, `csyears_t` ~line 1042): it's a bank of individual
+year checkboxes (2013-2025), every one `ui.Checkbox(year, false)` -
+unchecked - with the backing list (`chosen`/
+`crossSensorDictionary["year"]`) initialized to `[]`. There is no
+built-in default expectation-year range at all - the GUI ships with
+nothing selected, and the user must explicitly check which year(s)
+apply (a genuine multi-select; a user could pick a contiguous range or a
+scattered set of years). But the real cell 8C run's actual selection was
+already pulled directly from the GUI's own Console output
+(`BULCargumentDictionaryPlus`, see `configs/cell_8c_comparison.yaml`'s
+header comment): a single year, 2024 - exactly what the config already
+uses. There's no divergence to find here; the rebuild already matches
+the real run's actual selection, not a guessed default. This closes off
+that specific candidate - the west-side gap's cause is still
+unidentified.
 
 Elevation correlating with both the higher `residual_stddev` and the
 more negative z-score bias in the same (east) region is consistent with

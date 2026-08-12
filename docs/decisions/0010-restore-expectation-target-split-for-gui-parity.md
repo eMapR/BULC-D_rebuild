@@ -219,13 +219,26 @@ through 2026 so 2025's images would land in the one continuous stream.
   z-score is close to neutral (−0.032, not positive), so there's no
   comparable bias pushing the rebuild away from `decrease` — the rebuild
   simply isn't detecting as strong a `decrease` signal in the west as
-  the GUI apparently does. This is a different, still-open question:
-  either a real sensitivity/scale difference from something not yet
-  identified, or the GUI's own expectation fit (unknown internals —
-  possibly a wider/multi-year baseline, unlike this comparison's
-  deliberately single-year 2024 window) picks up a real west-side
-  disturbance signal this rebuild's fit misses entirely, not just
-  under-weights.
+  the GUI apparently does. This is a different, still-open question.
+
+  **"Wider/multi-year GUI baseline" candidate — RULED OUT 2026-08-12.**
+  Checked `guiBULCD.rtf` directly for the Expectation Period widget's
+  actual default (both the per-sensor tabs, e.g. `l8years_t` ~line 2948,
+  and the "Cross-Sensors" panel actually used for cell 8C's real run,
+  `csyears_t` ~line 1042): it's a bank of individual year checkboxes
+  (2013–2025) that are ALL `ui.Checkbox(year, false)` — every one
+  unchecked — with the backing list (`chosen`/`crossSensorDictionary["year"]`)
+  initialized to `[]`. **There is no built-in default expectation-year
+  range at all** — the GUI ships with nothing selected; the user must
+  explicitly check which year(s) apply, and could in principle pick a
+  multi-year or even non-contiguous set. But the real cell 8C run's
+  actual selection was already pulled directly from the GUI's own
+  Console output (`BULCargumentDictionaryPlus`, see this config's header
+  comment): a single year, 2024 — exactly what
+  `cell_8c_comparison.yaml` already uses. So there's no divergence to
+  find here: the rebuild already matches the real run's actual
+  expectation-year selection, not a guessed default. This candidate is
+  closed; the west-side gap's cause is still unidentified.
 
   Correlationally, higher elevation lining up with both higher
   `residual_stddev` and a more negative z-score bias in the same region
