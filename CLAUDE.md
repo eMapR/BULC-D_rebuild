@@ -649,8 +649,17 @@ useful context that isn't obvious from the field names alone:
   HIGHER in the protected east (4.3% vs. 2.1% west) — the opposite of
   the "actively managed west" framing — so this is folded into the
   elevation-correlated z-score bias above as a real-world proxy for the
-  same terrain confound, not an independent cause. West-side cause still
-  unidentified).
+  same terrain confound, not an independent cause. Target-period
+  evidence-density hypothesis RULED OUT 2026-08-12
+  (`scripts/debug_cell_8c_target_event_density.py`): combined,
+  cross-sensor valid-Event counts are nearly identical west vs. east
+  (34.48 vs. 34.89 of 61 bins), so `initializing_leveler`'s
+  `unchanged`-biased starting prior isn't simply getting less evidence
+  to overcome in the west. West-side cause still unidentified — every
+  tested hypothesis (sensor coverage, GUI expectation-year default,
+  land-management gradient, z-score bias, evidence density) is ruled
+  out; only hypothesis (d), an unknown formula/parameter difference,
+  remains, with no concrete lead yet).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

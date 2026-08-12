@@ -1445,12 +1445,32 @@ elevation -> more natural disturbance regime -> noisier/biased z-score),
 not a separate, independent cause. Folded into (c) rather than treated
 as its own explanation.
 
+**Evidence-density candidate RULED OUT 2026-08-12.** `scripts/debug_cell_8c_target_event_density.py`
+(new) checked a different question than the sensor-coverage diagnostic
+above (which tested per-sensor tiling in isolation): does the COMBINED,
+cross-sensor target-period Event count (how many of the 61
+`day_step_size=3` bins got a real observation from ANY enabled sensor,
+counted via `assemble_evidence_collection()` directly - the actual real
+Event stream `organize_inputs()` folds through the Bayesian engine, not
+a proxy) differ west vs. east? This mattered because
+`initializing_leveler=0.7` gives every pixel a starting prior biased
+toward `unchanged` ([0.1, 0.8, 0.1], not flat uniform) - fewer real
+Events means fewer chances to pull a pixel away from that prior,
+regardless of how extreme any individual z-score is. Result: west 34.48
+/ east 34.89 valid Events out of 61 total bins - essentially identical,
+~1% apart. The rendered thumbnail is uniformly mottled, no diagonal
+pattern. Evidence density is not the cause.
+
 Bottom line: the EAST-side portion of cell 8C's diagonal gap has a real,
 demonstrated cause inside this rebuild's own math (an elevation-
 correlated negative z-score bias, not a GUI-side mystery, now also
 independently corroborated by a real protection-status/terrain
-gradient). The WEST-side portion remains genuinely open - not sensor
-coverage, not a leveler placeholder, not a GUI expectation-year default
-mismatch, and not (by itself) the same z-score-bias mechanism. See
+gradient). The WEST-side portion remains genuinely open - ruled out so
+far: sensor coverage, a leveler placeholder, a GUI expectation-year
+default mismatch, the same z-score-bias mechanism as the east side, a
+land-management explanation independent of elevation, and target-period
+evidence density. Only hypothesis (d) - some other, still-unidentified
+formula/parameter difference - remains untested, with no concrete lead
+yet. See
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
 matching entry for the full numbers and thumbnails referenced.
