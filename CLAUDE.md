@@ -614,52 +614,46 @@ useful context that isn't obvious from the field names alone:
   see `docs/findings.md`'s "Revalidated 2026-08-11 against the real
   GUI..." entry — exports cell 8C's `final_probabilities` to
   `projects/bulcd-python-rebuild/assets/bulcd_cell8c_comparison_final_probabilities`.
-  Compared by the user against the real GUI's render, plus a
-  `gui_image.subtract(rebuild_image)` diff: large discrete disturbance
-  features visually match, but the diff revealed a large-scale, roughly
-  diagonal, spatially COHERENT gap across most of the cell (GUI scores
-  higher `decrease` on the west side, higher `increase` on the east) —
-  not just noise, and not attributable to a known placeholder (all three
-  levelers are confirmed real production values). Sensor-coverage
-  boundary hypothesis RULED OUT 2026-08-11
-  (`scripts/debug_cell_8c_sensor_coverage.py`). Elevation-correlated
-  z-score bias hypothesis PARTIALLY SUPPORTED 2026-08-12
-  (`scripts/debug_cell_8c_expectation_fit_quality.py`, see
-  `docs/decisions/0010`'s matching entry for full numbers): the rebuild's
-  own target-period z-score is real and measurably more negative
-  (`decrease`-leaning) in the cell's higher-elevation east half
-  (mean −0.138 vs. −0.032 west, elevation 1326m vs. 1012m), which is a
-  sufficient, demonstrated cause for the EAST side of the diff
-  specifically (rebuild under-calling `increase` there). Does NOT explain
-  the WEST side (rebuild under-calling `decrease` there) — the rebuild's
-  own z-score is near-neutral in the west, so nothing in this mechanism
-  suppresses `decrease` there; still an open follow-up. "GUI defaults to
-  a wider/multi-year expectation baseline" candidate RULED OUT
-  2026-08-12: `guiBULCD.rtf`'s Expectation Period widget (both per-sensor
-  tabs and the Cross-Sensors panel actually used for this run) is a bank
-  of year checkboxes that all default unchecked, `chosen = []` — there
-  is no built-in default at all, and the real cell 8C run's actual
-  selection (single year, 2024, read from the GUI's own Console output)
-  is already what `configs/cell_8c_comparison.yaml` uses. Land-management
-  gradient hypothesis CHECKED 2026-08-12
-  (`scripts/debug_cell_8c_land_management_gradient.py`): the cell
-  genuinely straddles a real protection-status boundary (Mount Rainier
-  NP + 3 adjacent wildernesses; west 15% protected vs. east 68%
-  protected), but Hansen `lossyear` forest-loss fraction is actually
-  HIGHER in the protected east (4.3% vs. 2.1% west) — the opposite of
-  the "actively managed west" framing — so this is folded into the
-  elevation-correlated z-score bias above as a real-world proxy for the
-  same terrain confound, not an independent cause. Target-period
-  evidence-density hypothesis RULED OUT 2026-08-12
-  (`scripts/debug_cell_8c_target_event_density.py`): combined,
-  cross-sensor valid-Event counts are nearly identical west vs. east
-  (34.48 vs. 34.89 of 61 bins), so `initializing_leveler`'s
-  `unchanged`-biased starting prior isn't simply getting less evidence
-  to overcome in the west. West-side cause still unidentified — every
-  tested hypothesis (sensor coverage, GUI expectation-year default,
-  land-management gradient, z-score bias, evidence density) is ruled
-  out; only hypothesis (d), an unknown formula/parameter difference,
-  remains, with no concrete lead yet).
+  Compared by the user against the real GUI's render: large discrete
+  disturbance features visually match, but a broad reduction in
+  scattered `decrease` speckle across much of the cell in the rebuild
+  does not. An initial `gui_image.subtract(rebuild_image)` diff read as
+  a diagonal west/east split, and five hypotheses framed around that
+  split were each tested and individually ruled out or folded into
+  another (sensor-coverage tiling boundary; a GUI expectation-year
+  default mismatch — the GUI has no default at all, checkboxes start
+  unchecked; a land-management/protection-status gradient — real
+  [Mount Rainier NP + 3 wildernesses, 68% protected east vs. 15% west]
+  but Hansen `lossyear` loss is actually higher in the protected east,
+  ruling out an "actively managed west" story; an elevation-correlated
+  negative z-score bias in the east half, real but insufficient alone;
+  target-period evidence density, nearly identical both sides). Full
+  numbers for each in `docs/decisions/0010`'s matching entry.
+
+  **2026-08-12, major finding: the west/east framing was wrong, and
+  `final_probabilities` itself is the real issue.** Directly comparing
+  the GUI and rebuild renders side by side (not just the diff) showed
+  the mismatch is spatially broad, not a clean split.
+  `scripts/debug_cell_8c_transient_vs_final_decrease.py` found that
+  `final_probabilities` — a snapshot of only the LAST target-period
+  Event's posterior — discards most real, transient `decrease` signal
+  from earlier in the sequence: "did this pixel ever classify as
+  `decrease` at any of the 61 target-period Events" is dense and
+  widespread, while "is `decrease` the final argmax" is sparse, confined
+  to the two known discrete features. Mechanism: `posterior_leveler=0.9`
+  (confirmed real) dampens toward the prior after every real Event
+  (~34/pixel on average) — `0.9^34 ≈ 3%` of an early Event's influence
+  survives to the end, so genuine mid-sequence disturbance gets smoothed
+  away by the time the sequence's last Event is reached. This is a
+  spatially broad effect, matching the actual observed mismatch far
+  better than any west/east hypothesis did. Open question: GUI's own
+  render, using the same confirmed leveler math, should show similar
+  washing-out — but visibly doesn't. Either the GUI's displayed image
+  isn't literally "state after the single last Event" the way
+  `final_probabilities` is (a definitional mismatch), or this rebuild's
+  Event count/ordering differs from production's real per-step process
+  in some unconfirmed way. Not yet resolved — see `docs/decisions/0010`'s
+  matching entry.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

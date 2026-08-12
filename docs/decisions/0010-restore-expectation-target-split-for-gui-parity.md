@@ -312,14 +312,70 @@ through 2026 so 2025's images would land in the one continuous stream.
   mottled with no diagonal pattern resembling the diff. Evidence density
   is not the cause.
 
-  Treat cell 8C as: the EAST-side portion of the diagonal gap has a
-  real, demonstrated cause inside this rebuild's own math (an
-  elevation-correlated negative z-score bias, now also independently
-  corroborated by a real protection-status/terrain gradient); the
-  WEST-side portion remains fully open. Ruled out so far: sensor
-  coverage, a leveler placeholder, a GUI expectation-year default
-  mismatch, the same z-score-bias mechanism as the east side, a
-  land-management-driven explanation independent of elevation, and
-  target-period evidence density. Only hypothesis (d) - some other,
-  still-unidentified formula/parameter difference - remains untested,
-  and there is currently no concrete lead for what it might be.
+  **2026-08-12 correction: the west/east framing was wrong. The user
+  directly compared the real GUI render against the rebuild's render
+  side by side (not just the computed `subtract()` diff) and found the
+  mismatch is NOT a clean spatial split** - it's a broad reduction in
+  scattered `decrease` (red) speckle across much of the cell in the
+  rebuild, while the two known discrete features (the center disturbance
+  cluster, the Longmire valley/road corridor string) match well between
+  GUI and rebuild. Every diagnostic above that assumed a west-half/
+  east-half structure (sensor coverage, GUI expectation-year default,
+  land-management gradient, target-period evidence density) is still
+  factually correct on its own terms, but was answering a framing of the
+  problem that doesn't match what's actually visible when the two
+  renders are compared directly.
+
+  **Major finding, `scripts/debug_cell_8c_transient_vs_final_decrease.py`
+  (new): `final_probabilities` is a heavily-smoothed LAST-EVENT-ONLY
+  snapshot that discards most real, transient `decrease` signal that
+  occurred earlier in the target period.** Using the real, unchanged
+  `engine.run_bulcd()`, compared "did this pixel ever classify as
+  `decrease` at any of the target period's 61 Events" (via
+  `classification_stack`) against "is `decrease` the argmax of
+  `final_probabilities`" (the single last-Event snapshot - what every
+  prior comparison in this investigation, and the real GUI-vs-rebuild
+  render comparison, actually used). Result: `ever_decrease` is a dense,
+  widespread, branching pattern covering a large fraction of the cell;
+  `final_decrease` is sparse, confined mostly to the two known discrete
+  features - visually, `ever_decrease`'s density and character is a much
+  closer match to the real GUI render than `final_decrease` (the
+  rebuild's actual output) is.
+
+  Mechanism: `posterior_leveler=0.9` (a confirmed real production value)
+  dampens the posterior toward the prior after EVERY real Event, not
+  just once. With ~34 real (non-placeholder) Events per pixel on average
+  in the target period (see the evidence-density check above), that
+  compounds to roughly `0.9^34 ≈ 3%` of an early Event's influence
+  surviving to the final Event. A pixel that genuinely showed `decrease`
+  partway through the target period gets almost entirely smoothed back
+  toward `unchanged` by the time the sequence ends - even though the
+  underlying signal was real. This directly explains a BROAD, spatially
+  non-localized reduction in visible `decrease`, matching what the user
+  observed far better than any west/east-framed hypothesis did.
+
+  **Open question, not yet resolved:** if GUI's own render is subject to
+  the same confirmed real `posterior_leveler=0.9` compounding over a
+  comparable number of real Events, it should show similarly heavy
+  washing-out of transient signal by its own last Event - yet the real
+  GUI render is visibly MORE speckled/red than the rebuild's, not less.
+  Either (a) the GUI's displayed/exported image isn't literally "state
+  after the single last target-period Event" the way this rebuild's
+  `final_probabilities` is (a genuine definitional mismatch, not a math
+  bug), or (b) something about how this rebuild orders/counts/applies
+  Events differs from production's real per-step process in a way that
+  causes MORE compounding decay here than production actually
+  experiences (a real math difference, not yet identified) - e.g. this
+  rebuild's exact Event count/ordering hasn't been cross-checked against
+  a real GUI Console dump the way the levelers themselves were. Given
+  `legacy/BULCD-Caller-Current.txt`'s confirmed `finalBulcProbs.select(0/1/2)`
+  usage, "final" does appear to mean the same single-snapshot concept on
+  both sides - which points toward (b), but this is not confirmed.
+
+  This finding likely supersedes the west/east framing as the dominant
+  explanation for cell 8C's GUI-vs-rebuild gap. The west/east-specific
+  hypotheses above remain individually correct (each really was ruled
+  out on its own terms) but are now understood as investigating a
+  secondary effect (the elevation-correlated z-score bias, still real)
+  layered on top of this larger, spatially-broad final-snapshot-vs-
+  transient-signal issue.
