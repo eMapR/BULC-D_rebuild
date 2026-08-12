@@ -1412,10 +1412,45 @@ would be) - real, aligned evidence, but the correlation with elevation
 is confirmed while snow/phenology as the specific physical cause of that
 correlation remains a plausible, unconfirmed mechanism, not proven.
 
+**Hypothesis (b) CHECKED 2026-08-12: the land-management gradient is a
+real geographic feature of the cell, but doesn't add an independent
+cause beyond (c).** `scripts/debug_cell_8c_land_management_gradient.py`
+(new) checked `WCMC/WDPA/current/polygons` (World Database on Protected
+Areas) and `UMD/hansen/global_forest_change_2023_v1_11`'s `lossyear`
+band (a real, BULC-D-independent historical forest-loss dataset, proxy
+for active timber management) over the same cell.
+
+West / east: protected-area fraction 0.149 / 0.679 (Mount Rainier NP
+plus three adjacent wildernesses - Goat Rocks, Tatoosh, William O.
+Douglas - genuinely cross the AOI; the east half is substantially more
+protected wilderness, a real, confirmed land-status gradient, not
+hypothetical); any-forest-loss-2001-2023 fraction 0.021 / 0.043 (east is
+actually HIGHER, not lower). The rendered protected-area mask shows a
+valley-shaped unprotected notch cutting into the protected block that
+plausibly corresponds to the same Longmire road corridor both the GUI
+and rebuild already agreed is disturbed; the Hansen thumbnail's largest
+recent-loss cluster lines up with the "dense disturbance cluster in
+center-north" both renders already agreed on - independent confirmation
+that feature is real, not a pipeline artifact.
+
+**This does NOT support the original "actively managed west side"
+framing** - if the west were the more heavily logged/managed half, its
+Hansen-loss fraction should be higher, not lower (it's the opposite:
+0.021 vs 0.043). The protection-status gradient is real and roughly
+aligned with the cell's layout, but BULC-D's algorithm has no input
+aware of land ownership/protection status - the more defensible reading
+is that "protected wilderness" here is a real-world proxy for the SAME
+elevation/terrain gradient already identified in hypothesis (c) (higher
+elevation -> more natural disturbance regime -> noisier/biased z-score),
+not a separate, independent cause. Folded into (c) rather than treated
+as its own explanation.
+
 Bottom line: the EAST-side portion of cell 8C's diagonal gap has a real,
 demonstrated cause inside this rebuild's own math (an elevation-
-correlated negative z-score bias, not a GUI-side mystery). The WEST-side
-portion remains genuinely open - not sensor coverage, not a leveler
-placeholder, and not (by itself) the same z-score-bias mechanism. See
+correlated negative z-score bias, not a GUI-side mystery, now also
+independently corroborated by a real protection-status/terrain
+gradient). The WEST-side portion remains genuinely open - not sensor
+coverage, not a leveler placeholder, not a GUI expectation-year default
+mismatch, and not (by itself) the same z-score-bias mechanism. See
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
 matching entry for the full numbers and thumbnails referenced.

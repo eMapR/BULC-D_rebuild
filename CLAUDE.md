@@ -640,8 +640,17 @@ useful context that isn't obvious from the field names alone:
   of year checkboxes that all default unchecked, `chosen = []` — there
   is no built-in default at all, and the real cell 8C run's actual
   selection (single year, 2024, read from the GUI's own Console output)
-  is already what `configs/cell_8c_comparison.yaml` uses. West-side cause
-  still unidentified).
+  is already what `configs/cell_8c_comparison.yaml` uses. Land-management
+  gradient hypothesis CHECKED 2026-08-12
+  (`scripts/debug_cell_8c_land_management_gradient.py`): the cell
+  genuinely straddles a real protection-status boundary (Mount Rainier
+  NP + 3 adjacent wildernesses; west 15% protected vs. east 68%
+  protected), but Hansen `lossyear` forest-loss fraction is actually
+  HIGHER in the protected east (4.3% vs. 2.1% west) — the opposite of
+  the "actively managed west" framing — so this is folded into the
+  elevation-correlated z-score bias above as a real-world proxy for the
+  same terrain confound, not an independent cause. West-side cause still
+  unidentified).
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in
