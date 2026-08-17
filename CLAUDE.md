@@ -597,11 +597,16 @@ useful context that isn't obvious from the field names alone:
   already a validated config path with no corresponding export function
   until now. VERIFIED against real Earth Engine: `bulcd preview
   configs/cell_8c_comparison.yaml` runs the full pipeline end-to-end and
-  returns a working thumbnail URL; all 33 tests still pass. `export` not
-  yet separately exercised beyond code review (same
-  `export_image_to_asset()`/new `export_image_to_drive()` functions
-  `scripts/export_*.py` already used successfully, just called from the
-  CLI instead).
+  returns a working thumbnail URL; all 33 tests still pass.
+  `bulcd export` ALSO VERIFIED for real, 2026-08-17: ran a full cell 8C
+  export via a throwaway config (`asset` destination, distinct
+  `description_prefix` so it didn't collide with the reference
+  `bulcd_cell8c_comparison_final_probabilities` asset the parity
+  findings above are anchored to) — task `DWG3YGV5MCGMKMZTPZ6SPUBF`
+  completed in ~24 minutes, produced a real 3-band
+  (decrease/unchanged/increase) asset, confirmed via `ee.data.getAsset()`,
+  then deleted (it was a smoke test, not a result worth keeping). Both
+  CLI subcommands are now real-EE-verified, not just code-reviewed.
 - `bulcd/interpret.py` — partial: `year_of_change()`/
   `disturbance_mask_for_year()` (the "when did this pixel change"
   question) plus `zscore_anomaly_mask_for_year()` (the "was this pixel
