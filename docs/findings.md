@@ -1640,3 +1640,49 @@ mismatch, not just a contributing factor. Not yet done: a fresh
 `subtract()` diff to quantify how small the residual gap now is. See
 [decisions/0010](decisions/0010-restore-expectation-target-split-for-gui-parity.md)'s
 matching entry for the full numbers and next steps.
+
+**Quantified diff, 2026-08-17
+(`scripts/debug_cell_8c_postfix_quantified_diff.py`, new): the gap is
+small and no longer spatially coherent.** First actual pixel-statistics
+pass in this investigation - every prior comparison was a visual
+side-by-side or an un-`abs()`'d `subtract()` render. Used the two real
+assets already live in `projects/bulcd-python-rebuild/assets/` from the
+2026-08-12 "much closer!" comparison, no fresh export needed:
+`Version-V53e-4-Final-BULC-Probabilities_gui3` (GUI, updateTime
+17:57:21Z) vs. `bulcd_cell8c_comparison_final_probabilities` (rebuild
+post-DOY-fix, updateTime 20:03:53Z, task `X6FTZKHMKKEQMYVAYCNE4WHD`) -
+same day, the exact pair the user's verdict was based on.
+
+Whole-cell `reduceRegion()` stats (0-1 probability scale, `decrease`/
+`unchanged`/`increase` bands):
+- Mean absolute error: `decrease` 0.027, `unchanged` 0.035, `increase`
+  0.010 (overall mean 0.024).
+- RMSE: `decrease` 0.062, `unchanged` 0.071, `increase` 0.029.
+- Per-band Pearson correlation (GUI vs. rebuild): 0.868 / 0.862 / 0.861.
+- **Argmax classification agreement: 97.9%** of pixels agree on the
+  winning class (decrease/unchanged/increase) between GUI and rebuild.
+
+Rendered the disagreement mask (`gui_argmax != rebuild_argmax`) and
+looked at it directly: scattered red speckle spread fairly evenly
+across the cell, no diagonal or other large-scale structure - a
+qualitatively different picture from the pre-fix `subtract()` diff,
+which was dominated by a coherent west-red/east-blue split. This is
+consistent with the fix having resolved the dominant, structured cause;
+what's left reads as ordinary per-pixel noise (sensor/timing jitter,
+individual noisy z-scores near a bin boundary), not a remaining
+systematic bug. A thin white line follows the Longmire valley/road
+corridor and a small white blob appears near the cell's one lake in the
+disagreement thumbnail - most likely a water-mask edge-case (one image
+masked, the other not, at the same pixels) rather than true
+classification disagreement, since `reduceRegion()`'s default mean
+reducer already excludes masked pixels from the 97.9% figure; not
+chased further.
+
+**Bottom line: the DOY-filter fix was confirmed, quantitatively, to
+have closed the main gap.** 97.9% pixel-level agreement and no
+remaining spatial structure. The `posterior_leveler`
+compounding/transient-signal hypothesis (still open per the earlier
+entry above) may explain some of the remaining ~2%, but at this
+magnitude it's no longer the dominant open question the way it looked
+before the DOY fix - the investigation's main open thread is
+effectively resolved.

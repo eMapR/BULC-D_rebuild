@@ -525,9 +525,12 @@ through 2026 so 2025's images would land in the one continuous stream.
     actual dominant cause of the original mismatch, not just a
     contributing factor.
 
-  Not yet done: a fresh `gui_image.subtract(rebuild_image)` diff with
-  the new asset, the same way the original gap was first quantified, to
-  measure exactly how small the residual gap now is and whether any
-  remaining difference has structure worth chasing or is down to
-  scattered noise. The visual match is very strong but not yet
-  pixel-quantified.
+  **Pixel-quantified 2026-08-17** (`scripts/debug_cell_8c_postfix_quantified_diff.py`,
+  see `docs/findings.md`'s matching entry for full numbers): whole-cell
+  `reduceRegion()` stats against the same two assets give MAE 0.01-0.035
+  per band, per-band correlation ~0.86, and **97.9% argmax classification
+  agreement**. The disagreement mask is scattered speckle with no
+  diagonal or other large-scale structure, unlike the pre-fix diff -
+  confirms the visual match above quantitatively and closes this
+  investigation's main open thread. Remaining ~2% disagreement reads as
+  ordinary per-pixel noise, not a further systematic bug.

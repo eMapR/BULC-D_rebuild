@@ -705,9 +705,21 @@ useful context that isn't obvious from the field names alone:
   visually obvious gap in every pre-fix comparison (and the original
   reason the west/east framing existed at all) now matches the GUI's
   density and distribution closely, alongside the previously-matching
-  discrete features. A fresh quantified `subtract()` diff against the
-  GUI is the natural next step to measure the residual gap precisely.
-  See `docs/decisions/0010`'s matching entry for the full trace.
+  discrete features.
+
+  **2026-08-17: quantified — 97.9% argmax classification agreement.**
+  `scripts/debug_cell_8c_postfix_quantified_diff.py` ran the first real
+  pixel-statistics pass (`reduceRegion()` mean/RMSE/correlation) against
+  the two assets already live from the 2026-08-12 comparison. Whole-cell
+  MAE 0.01–0.035 per band (decrease/unchanged/increase), per-band
+  Pearson correlation ~0.86, and 97.9% pixel-level argmax agreement. The
+  disagreement mask is scattered speckle with no diagonal or other
+  large-scale structure — unlike the pre-fix `subtract()` diff's
+  coherent west/east split. This closes the cell 8C GUI-vs-rebuild
+  parity investigation's main open thread; remaining disagreement reads
+  as ordinary per-pixel noise, not a further systematic bug. See
+  `docs/decisions/0010`'s and `docs/findings.md`'s matching entries for
+  the full trace and numbers.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in
