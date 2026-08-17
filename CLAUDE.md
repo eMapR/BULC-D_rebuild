@@ -749,6 +749,22 @@ useful context that isn't obvious from the field names alone:
   as ordinary per-pixel noise, not a further systematic bug. See
   `docs/decisions/0010`'s and `docs/findings.md`'s matching entries for
   the full trace and numbers.
+
+  **2026-08-17: checked whether the DOY-filter fix also affects the
+  EXPECTATION period — negative result for cell 8C.** The fix lives in
+  shared code (`_landsat_evidence()`/`_s2_evidence()`, called for both
+  `evidence.expectation` and `evidence.target`), so it already covers
+  both periods by construction; what was open was whether cell 8C's
+  real 2024 expectation year actually had a trailing-gap image the way
+  2025's target year did.
+  `scripts/debug_expectation_doy_filter_check.py` compared per-bin raw
+  image counts (not total bin count — bins exist as placeholders
+  regardless of match count, so that metric can't see this class of
+  bug) between the current evidence collection and a reconstructed
+  pre-fix version: all 72 bins identical, despite a real near-boundary
+  Sentinel-2 image existing in the raw stream. Zero impact on the
+  harmonic expectation fit for this config — a clean negative result,
+  not a general guarantee for every AOI/year/`day_step_size` combination.
 - **Reality check on test coverage**: only genuinely pure-Python logic
   is tested without a live EE session — `_select_modality_regressors()`,
   the loader's validations, and the upfront config guards in

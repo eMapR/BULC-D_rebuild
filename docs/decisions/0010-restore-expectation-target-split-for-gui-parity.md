@@ -534,3 +534,17 @@ through 2026 so 2025's images would land in the one continuous stream.
   confirms the visual match above quantitatively and closes this
   investigation's main open thread. Remaining ~2% disagreement reads as
   ordinary per-pixel noise, not a further systematic bug.
+
+  **Expectation-period DOY-filter check, 2026-08-17** (see
+  `docs/findings.md`'s matching entry for the full trace): the
+  `calendarRange` fix above is shared code, so it already covers the
+  expectation period by construction - checked empirically whether cell
+  8C's real expectation year (2024) actually had a trailing-gap image
+  the way the target year (2025) did.
+  `scripts/debug_expectation_doy_filter_check.py` compared per-bin raw
+  image counts (not total bin count, which can't detect this class of
+  bug) between the current evidence collection and a reconstructed
+  pre-fix version: **all 72 bins identical** - zero impact for this
+  specific config, despite a real near-boundary Sentinel-2 image
+  existing in the raw stream. Not a general guarantee for every
+  config/year, just a clean negative result for cell 8C.

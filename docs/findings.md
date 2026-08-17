@@ -1686,3 +1686,50 @@ entry above) may explain some of the remaining ~2%, but at this
 magnitude it's no longer the dominant open question the way it looked
 before the DOY fix - the investigation's main open thread is
 effectively resolved.
+
+**2026-08-17: checked whether the same DOY-filter bug also affected the
+EXPECTATION period - it doesn't, for cell 8C.**
+`scripts/debug_expectation_doy_filter_check.py` (new). The fix itself
+(removing the per-image `calendarRange(first_doy, last_doy,
+"day_of_year")` filter from `_landsat_evidence()`/`_s2_evidence()`) is
+shared code - `assemble_evidence_collection()` is called once for
+`config.evidence.expectation` and once for `config.evidence.target`
+through the exact same functions, so the code fix already covers both
+periods by construction. What was actually open was empirical: did
+cell 8C's real expectation year (2024, DOY 74-288) have a real image in
+the same kind of narrow trailing-DOY gap the target year (2025) did?
+
+First pass used the wrong metric (comparing total bin COUNT between a
+fixed and a reconstructed pre-fix collection) and wrongly concluded "no
+difference" - bin count is fixed by the date-range formula alone (every
+bin exists as a masked placeholder regardless of whether any image
+matches it), so it can't detect this class of bug, which changes a
+bin's CONTENT, not the number of bins. Corrected to compare per-bin raw
+image counts directly (replicating `_bin_evidence_by_day_step()`'s
+internal join to inspect the intermediate list length) - the same
+granularity the original target-period bug was actually found at.
+
+Result: **all 72 bins have identical raw-image counts** between the
+current (fixed) evidence collection and a reconstruction of the old,
+buggy per-image-DOY-filtered version. Despite real trailing-gap
+candidate images existing in the raw stream (e.g. a real Sentinel-2
+scene on 2024-10-16, DOY ~289-290, one day-class past last_doy=288 -
+structurally the same kind of image as the 2025-10-16 scene that caused
+the original target-period bug), none of them actually lands inside any
+bin's date window for this specific config - the trailing extension is
+only a couple of days wide (`day_step_size=3`) and the near-boundary
+images that exist happen to fall just outside it. The harmonic
+expectation fit (coefficients/r2/residual_stddev) is therefore
+byte-identical before and after the fix for cell 8C - genuinely zero
+impact, not just a small one.
+
+**Caveat: this is a negative result for ONE config (cell 8C, 2024
+expectation year), not a general proof the expectation period can never
+be affected.** Whether a real trailing-gap image lands inside the
+few-day extension window is a coincidence of that year's actual
+satellite revisit pattern, not something guaranteed by the math - a
+different AOI, year, or `day_step_size` could easily have a real
+trailing image fall inside the window instead of just outside it, the
+way cell 8C's *target* year (2025) did. The check itself
+(`scripts/debug_expectation_doy_filter_check.py`) is real and reusable
+against any config, just this specific run's result is negative.
