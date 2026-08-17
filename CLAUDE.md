@@ -572,12 +572,36 @@ useful context that isn't obvious from the field names alone:
   `scripts/debug_bb_complex_fire.py`, `scripts/debug_long_baseline_disturbance.py`,
   `scripts/debug_disturbance_map.py`, `scripts/debug_grid_cell_map.py`,
   `scripts/debug_year_of_change_map.py`, and `scripts/run_cell_8c_comparison.py`
-  are the actual runnable entry points today — hardcoded test AOIs/configs
-  (or, for the last one, `configs/cell_8c_comparison.yaml`), cheap
-  preview renders (`.getInfo()`/`.getThumbURL()`), not a real CLI
-  (`bulcd/cli.py` doesn't exist yet). `scripts/export_year_disturbance_map.py`
-  and `scripts/export_cell_8c_comparison.py` (new 2026-08-11) are the two
-  real, non-preview `Export.image.toAsset()` entry points.
+  remain the entry points for one-off investigation code with hardcoded
+  logic beyond what a generic CLI should expose (e.g. comparing two
+  intermediate layers) — hardcoded test AOIs/configs (or, for the last
+  one, `configs/cell_8c_comparison.yaml`), cheap preview renders
+  (`.getInfo()`/`.getThumbURL()`). `scripts/export_year_disturbance_map.py`
+  and `scripts/export_cell_8c_comparison.py` (new 2026-08-11) are
+  one-off, non-preview `Export.image.toAsset()` entry points from before
+  the CLI existed.
+
+  **`bulcd/cli.py` now exists (2026-08-17)** — the real, generic,
+  config-driven entry point for routine runs (Vision doc's "separate the
+  algorithm from the GUI" goal, `mckenzeBULCD.rtf`'s style). Two
+  subcommands: `bulcd preview <config.yaml>` (cheap `getThumbURL()`
+  preview of `final_probabilities`, no billed export — the `debug_run.py`
+  pattern, generalized) and `bulcd export <config.yaml>` (starts a real
+  `Export.image.toAsset()`/`toDrive()` batch task per
+  `config.export.destination` and returns immediately). Registered as a
+  console script (`pyproject.toml`'s `[project.scripts]`) — after
+  `pip install -e .`, callable directly as `bulcd preview ...`/
+  `bulcd export ...`, not just `python -m bulcd.cli`. `bulcd/export.py`
+  gained `export_image_to_drive()` alongside the existing
+  `export_image_to_asset()` — `ExportConfig.destination == "drive"` was
+  already a validated config path with no corresponding export function
+  until now. VERIFIED against real Earth Engine: `bulcd preview
+  configs/cell_8c_comparison.yaml` runs the full pipeline end-to-end and
+  returns a working thumbnail URL; all 33 tests still pass. `export` not
+  yet separately exercised beyond code review (same
+  `export_image_to_asset()`/new `export_image_to_drive()` functions
+  `scripts/export_*.py` already used successfully, just called from the
+  CLI instead).
 - `bulcd/interpret.py` — partial: `year_of_change()`/
   `disturbance_mask_for_year()` (the "when did this pixel change"
   question) plus `zscore_anomaly_mask_for_year()` (the "was this pixel
@@ -733,6 +757,6 @@ useful context that isn't obvious from the field names alone:
   total across `tests/test_config_loader.py`, `tests/test_inputs.py`,
   `tests/test_engine.py` (no dedicated `test_interpret.py` yet — same
   live-EE-session caveat applies).
-- `cli.py` and the `sensors/` submodule from the earlier package-structure
-  draft are still unwritten — see "Legacy source repos and what's still
-  missing" above.
+- `cli.py` now exists (2026-08-17) — see its own entry above. The
+  `sensors/` submodule from the earlier package-structure draft is still
+  unwritten — see "Legacy source repos and what's still missing" above.

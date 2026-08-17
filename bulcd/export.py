@@ -53,3 +53,33 @@ def export_image_to_asset(
     )
     task.start()
     return task
+
+
+def export_image_to_drive(
+    image: ee.Image,
+    folder: str,
+    file_name_prefix: str,
+    region: ee.Geometry,
+    description: str,
+    scale: int = 30,
+    crs: str = "EPSG:4326",
+    max_pixels: int = int(1e13),
+) -> ee.batch.Task:
+    """Starts (not just builds) an Export.image.toDrive() batch task.
+
+    Same posture as export_image_to_asset() above - `ExportConfig.destination
+    == "drive"` was already a validated config path (bulcd/config/loader.py)
+    with no corresponding export function until now.
+    """
+    task = ee.batch.Export.image.toDrive(
+        image=image,
+        description=description,
+        folder=folder,
+        fileNamePrefix=file_name_prefix,
+        region=region,
+        scale=scale,
+        crs=crs,
+        maxPixels=max_pixels,
+    )
+    task.start()
+    return task
