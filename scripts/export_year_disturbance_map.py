@@ -5,18 +5,24 @@ other scripts/debug_*.py script so far.
 
 Produces a 2-band image, one band per "was this pixel abnormal in year Y"
 question identified in CLAUDE.md "Year of change" (see also
-bulcd/interpret.py's module docstring):
+bulcd/interpret.py's module docstring, reworked 2026-08-18 for
+docs/decisions/0010's restored expectation/target split, and in the
+process corrected against the real, fetched afn_interpretBULCDResult
+source):
   - "zscore_anomaly": FAST layer. Straight from organize_inputs()'s
-    per-image z-score stream - no Bayesian accumulation, no lag, but no
-    noise-robustness either (a single bad scene can trigger it).
-  - "bulc_classification": ROBUST layer. The actual BULC-D sequential
-    classification's answer - noise-robust by design, but potentially
-    badly lagged for a year this recent. VALIDATED FINDING (known B&B
-    Complex Fire test): at default recency_factor=1.0, this lagged a real
-    disturbance by 12 YEARS. For a target year as recent as 2025, this
-    band is very likely to come back mostly/entirely empty at the
-    default - that's expected pipeline behavior given how little
-    post-2025 evidence exists yet, not a bug in this script.
+    per-image z-score stream (already scoped to the target period) - no
+    Bayesian accumulation, no lag, but no noise-robustness either (a
+    single bad scene can trigger it).
+  - "bulc_classification": ROBUST layer. `disturbance_mask_for_year()` -
+    did the pixel's raw "decrease" probability first cross
+    CHANGE_THRESHOLD in TARGET_YEAR specifically - the real source's
+    "first crossing" definition (`firstChange`,
+    legacy/6002.C2-BULCD-Module-analyzeOutputs.txt lines 110-137), not the
+    old year_of_change()'s "persistent run holding through the end of a
+    long CONTINUOUS multi-decade stream" (docs/decisions/0003, superseded)
+    - which the real source never actually implemented, and which could
+    lag a real disturbance by over a decade (a validated finding at the
+    B&B Complex Fire test point, recency_factor=1.0).
 
 AOI: same grid-cell lookup as scripts/debug_grid_cell_map.py
 (clipped_grid_35000m, filtered by grid_id). Evidence config's L8 sensor
@@ -26,9 +32,11 @@ of calendar year 2025.
 
 Usage:
     conda run -n bulcd python scripts/export_year_disturbance_map.py \\
-        CELL_ID YEAR ASSET_ID [RECENCY_FACTOR] [ZSCORE_THRESHOLD]
+        CELL_ID YEAR ASSET_ID [RECENCY_FACTOR] [ZSCORE_THRESHOLD] [CHANGE_THRESHOLD]
     e.g. conda run -n bulcd python scripts/export_year_disturbance_map.py \\
         2F 2025 projects/bulcd-python-rebuild/assets/disturbance_2025
+    (CHANGE_THRESHOLD defaults to 0.5 - see module docstring caveat on the
+    still-missing real production threshold value)
 
 Starts the export and returns immediately - does not wait for completion.
 Check progress via `earthengine task info <id>` or the GEE Code Editor's
@@ -64,6 +72,7 @@ ASSET_ID = (
 )
 RECENCY_FACTOR = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
 ZSCORE_THRESHOLD = float(sys.argv[5]) if len(sys.argv) > 5 else -2.0
+CHANGE_THRESHOLD = float(sys.argv[6]) if len(sys.argv) > 6 else 0.5
 
 grid = ee.FeatureCollection(GRID_ASSET)
 cell = grid.filter(ee.Filter.eq("grid_id", CELL_ID)).first()
@@ -99,11 +108,7 @@ config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=AOI),  # mask_water defaults True
     # Restored expectation/target period split (docs/decisions/0010):
     # expectation = the same 2000-2003 baseline as the other debug
-    # scripts; target = the single queried YEAR. See
-    # scripts/debug_year_of_change_map.py's docstring for the caveat that
-    # interpret.py's classification_stack-based functions (used below via
-    # disturbance_mask_for_year()) haven't been reconsidered for this
-    # short-target-period shape yet.
+    # scripts; target = the single queried YEAR.
     evidence=EvidenceConfig(
         expectation=EvidencePeriodConfig(
             sensors={
@@ -141,16 +146,18 @@ config = BULCDConfig(
 organized = organize_inputs(config)
 result = engine.run_bulcd(config)
 
-zscore_mask = interpret.zscore_anomaly_mask_for_year(
-    organized.lof_zscore, TARGET_YEAR, threshold=ZSCORE_THRESHOLD
-)
+zscore_mask = interpret.zscore_anomaly_mask(organized.lof_zscore, threshold=ZSCORE_THRESHOLD)
 bulc_mask = interpret.disturbance_mask_for_year(
-    result.classification_stack, TARGET_YEAR, target_class_index=0
+    result.probability_stack,
+    TARGET_YEAR,
+    class_name="decrease",
+    threshold=CHANGE_THRESHOLD,
+    comparison="gt",
 ).rename("bulc_classification")
 
 combined = ee.Image.cat([zscore_mask, bulc_mask]).toInt8()
 
-# classification_stack/lof_zscore both bypass run_bulcd()'s automatic
+# probability_stack/lof_zscore both bypass run_bulcd()'s automatic
 # water/non-forest masking (that only ever touches final_probabilities) -
 # apply it explicitly here. Fixes both the mountain-top/above-treeline
 # false-"change" artifact (mask_non_forest, new 2026-07-30) and the fact
@@ -170,7 +177,10 @@ task = export.export_image_to_asset(
 )
 
 print(f"Export started: task id = {task.id}")
-print(f"Cell: {CELL_ID}, year: {TARGET_YEAR}, recency_factor: {RECENCY_FACTOR}")
+print(
+    f"Cell: {CELL_ID}, year: {TARGET_YEAR}, recency_factor: {RECENCY_FACTOR}, "
+    f"decrease-probability threshold: {CHANGE_THRESHOLD}"
+)
 print(f"Asset destination: {ASSET_ID}")
-print("Bands: zscore_anomaly (fast/noisy), bulc_classification (robust/laggy)")
+print("Bands: zscore_anomaly (fast/noisy), bulc_classification (robust, first-crossing)")
 print("Monitor via `earthengine task info <id>` or the GEE Code Editor Tasks tab.")

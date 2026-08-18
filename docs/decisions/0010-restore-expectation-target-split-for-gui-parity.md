@@ -99,6 +99,28 @@ through 2026 so 2025's images would land in the one continuous stream.
   explicit open follow-up — every `scripts/debug_*.py`/
   `scripts/export_year_disturbance_map.py` script that calls into
   `interpret.py` now carries an inline note flagging this.
+
+  **RESOLVED 2026-08-18** (see `docs/findings.md`'s matching entry for
+  the full trace). Picking this follow-up up meant actually reading the
+  real `afn_interpretBULCDResult` source closely for the first time
+  (`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`, fetched 2026-08-10
+  but not previously acted on) - it revealed this was a bigger correction
+  than just re-scoping for a shorter stack: production's real analysis
+  thresholds the raw per-Event PROBABILITY stack per class and takes the
+  FIRST crossing, with no persistent-run requirement and no argmax
+  involved at all - not what `year_of_change()` did. Old
+  `year_of_change()`/`disturbance_mask_for_year()` removed; replaced with
+  `was_it_ever()` (direct port of production's `wasItEver`/
+  `howOftenWasIt`) and `first_change_year()` (production's `firstChange`,
+  but reading a real calendar year off `system:time_start` instead of
+  reconstructing an approximate date from a day-step-size offset the way
+  production's own `orangeDateDOY` has to). `disturbance_mask_for_year()`
+  kept as a thin wrapper. Validated against real Earth Engine three ways:
+  a synthetic-data check with a known crossing pattern (including an
+  index-0 edge case), a real `run_bulcd()`/`organize_inputs()` pass over
+  `configs/cell_8c_comparison.yaml` at a known test pixel, and a full
+  end-to-end run of `scripts/debug_year_of_change_map.py` returning a
+  real thumbnail URL.
 - **Config shape changed for every existing YAML file.**
   `configs/cell_8c_comparison.yaml` and `configs/example.yaml` were
   rewritten to the new `evidence.expectation`/`evidence.target` shape;

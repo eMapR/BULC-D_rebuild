@@ -164,8 +164,8 @@ def study_area_mask(config: BULCDConfig) -> ee.Image | None:
     `classification_stack`/`probability_stack`/`organize_inputs()`'s
     `lof_zscore` do NOT go through that step - any caller building an
     output image directly from those (e.g. bulcd/interpret.py's
-    year_of_change()/zscore_anomaly_mask_for_year()) needs to apply this
-    mask itself. Added 2026-07-30 alongside `mask_non_forest` after
+    was_it_ever()/first_change_year()/zscore_anomaly_mask()) needs to
+    apply this mask itself. Added 2026-07-30 alongside `mask_non_forest` after
     scripts/export_year_disturbance_map.py's first real export was found
     to have neither mask applied - a real gap, not by design.
     """

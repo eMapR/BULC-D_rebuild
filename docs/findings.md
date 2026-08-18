@@ -1733,3 +1733,102 @@ trailing image fall inside the window instead of just outside it, the
 way cell 8C's *target* year (2025) did. The check itself
 (`scripts/debug_expectation_doy_filter_check.py`) is real and reusable
 against any config, just this specific run's result is negative.
+
+## interpret.py reworked: real afn_interpretBULCDResult source acted on, old year_of_change() removed (2026-08-18)
+
+Picked up the open follow-up from `docs/decisions/0010` (reconsider
+`bulcd/interpret.py`'s `year_of_change()`/`disturbance_mask_for_year()`
+for the restored expectation/target split). While doing that, actually
+read the real `afn_interpretBULCDResult` source
+(`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`) closely for the first
+time — it was fetched 2026-08-10, and CLAUDE.md already noted in passing
+that production's "when did it change" was probably the FIRST threshold
+crossing rather than a persistent run, but that observation had never
+actually been acted on in code until now.
+
+Reading it directly surfaced two real, structural corrections, not just
+the split-related scoping issue the follow-up was originally about:
+
+1. Production's `wasItEver` (source lines 20-47) and "timing"/`firstChange`
+   (lines 90-145) both operate on `probabilityStackThroughTime` - the raw
+   per-Event PROBABILITY stack, thresholded per class (`wasItEverValue`/
+   `timingThreshold` against `probCls1`/`probCls2`/`probCls3`) - never a
+   derived per-Event argmax "winning class." The old `year_of_change()`
+   read `classification_stack` (this rebuild's argmax layer) instead -
+   answering a related but genuinely different question production never
+   asks.
+2. `firstChange` takes the MINIMUM matching index across Events - the
+   FIRST threshold crossing, no persistence requirement at all. The old
+   `year_of_change()` searched for the start of a run that had to hold
+   PERSISTENTLY through the end of the stack - a materially stricter
+   question, and, per the original finding this project already
+   documented (this same entry's earlier "Year of change" write-up), the
+   likely real cause of the observed 12-year detection lag under the old
+   continuous-evidence-stream design (`docs/decisions/0003`, superseded) -
+   not merely an artifact of that design's long time horizon.
+
+Removed `year_of_change()`/`disturbance_mask_for_year()` (old,
+classification_stack-based) entirely rather than keeping them alongside a
+replacement - they modeled a question the real algorithm doesn't ask.
+Added, as direct (not full) ports of the real source:
+- `was_it_ever(probability_stack, class_name, threshold, comparison="gt")`
+  - production's `wasItEver`/`howOftenWasIt`, returns a 2-band
+  boolean+fraction image.
+- `first_change_year(probability_stack, class_name, threshold, comparison="gt")`
+  - production's `firstChange`, but reads the real calendar year off
+  `system:time_start` (which this rebuild's Events already carry, unlike
+  production's flattened multi-band layers, which need a
+  day_step_size-based DOY reconstruction, `orangeDateDOY`, to get a date
+  at all) instead of returning a raw step index.
+- `disturbance_mask_for_year()` kept as a thin `first_change_year() == year`
+  wrapper, same name/shape as the function it replaces.
+- `zscore_anomaly_mask_for_year()` renamed to `zscore_anomaly_mask()`
+  (year filter dropped - `organize_inputs()` already scopes z-scores to
+  the target period, so it was redundant under the restored split). This
+  one isn't in the real source at all; still a documented reconstruction.
+
+No confirmed production threshold values exist yet (`BULCD-AnalysisParameters-v5`
+- `dropThresholdToDenoteChange`/`timingThreshold` - still unfetched), so
+`threshold` is a required argument in every new function, never defaulted
+to a guessed number. The two calling scripts
+(`scripts/debug_year_of_change_map.py`/`scripts/export_year_disturbance_map.py`)
+default their own `CHANGE_THRESHOLD` CLI arg to 0.5, documented explicitly
+as a placeholder, not a claimed production value.
+
+**Validated against real Earth Engine, three ways:**
+1. Synthetic-data check (5 hand-built Events at a single point with a
+   known "decrease" probability pattern: 0.10/0.10/0.60/0.20/0.60,
+   crossing 0.5 at indices 2 and 4): `was_it_ever()` returned
+   `was_it_ever=True, how_often_was_it=0.4` exactly as expected;
+   `first_change_year()` returned 2022 (the first crossing's year), not
+   2020 or 2024; a threshold never crossed (0.9) came back fully masked;
+   `disturbance_mask_for_year()` correctly returned True for 2022 and
+   False for 2023. A second synthetic case with the crossing at index 0
+   (a regression check for the additive-sentinel design used instead of
+   production's own index+1/-1 offset trick, to rule out an off-by-one
+   confusing "matched at position 0" with "never matched") also passed.
+2. Real integration check against an actual `run_bulcd()` +
+   `organize_inputs()` pass over `configs/cell_8c_comparison.yaml` at the
+   known (-121.62455, 46.57266) test pixel (the same pixel used in the
+   2026-08-12 hypothesis-(b) investigation): ran without error;
+   `was_it_ever(probability_stack, "decrease", 0.5, "gt")` = True,
+   `how_often_was_it` ≈ 1/72; `first_change_year(...)` = 2025 (matching
+   the target period's own single year, as expected for this
+   short-target-period config); `zscore_anomaly_mask` = True (consistent
+   with this being a known real-disturbance pixel);
+   `final_probabilities`' own decrease band (0.667) cross-checked as
+   sane against these.
+3. `scripts/debug_year_of_change_map.py` (the actual calling script, not
+   just interpret.py in isolation) run end-to-end for real (cell 11A,
+   2020, threshold 0.5) - completed without error and returned a working
+   thumbnail URL.
+
+`scripts/export_year_disturbance_map.py` was updated to the same new API
+and compiles, but NOT run - it starts a real, billed
+`Export.image.toAsset()` task, left for the user to run intentionally
+rather than as part of this rework.
+
+Not in scope for this rework, still open: `largeDropOrange`'s raw-index
+magnitude sanity check (would need `organize_inputs()` to expose
+per-period mean-index images, which it doesn't) and "changed, then
+recovered" detection (still no source-confirmed design for it).

@@ -4,38 +4,44 @@ this project's users actually want ("if I'm looking for disturbance in
 2025, tell the program that, get back a disturbance map"), as opposed to
 scripts/debug_grid_cell_map.py's "current accumulated state" map.
 
-Built on bulcd/interpret.py's year_of_change()/disturbance_mask_for_year()
-(added 2026-07-30 - see CLAUDE.md "Year of change"), which read
-classification_stack's per-Event dates (only present since bulc.py/
-engine.py started threading system:time_start through - an older
-classification_stack won't work here) to find, per pixel, the calendar
-year its classification persistently flipped to "decrease."
+Built on bulcd/interpret.py's disturbance_mask_for_year() (reworked
+2026-08-18 for docs/decisions/0010's restored expectation/target split,
+and in the process corrected against the real, fetched
+afn_interpretBULCDResult source - see that module's docstring for the
+full rationale). TARGET_YEAR below picks which year's target period to
+build (i.e. which year's evidence feeds `probability_stack`); it's also
+passed straight through to disturbance_mask_for_year()'s own `year`
+argument, since the real source's "first threshold crossing" logic
+answers "when," not just "whether."
 
-IMPORTANT CAVEAT (from before docs/decisions/0010's expectation/target
-split restoration): the original multi-decade-lag finding below assumed
-a long CONTINUOUS evidence stream (docs/decisions/0003, now superseded) -
-at recency_factor=1.0, the detected change year lagged the true
-disturbance by OVER A DECADE (2015 detected vs. 2003 actual) because the
-running classification took that long to flip across many "confirm
-normal" Events. With the expectation/target split restored, the target
-period is typically short (a single season), so `classification_stack`
-now has far fewer Events - `year_of_change()`'s "persistent run through
-the end of the stack" logic is largely degenerate over that short a
-stack (see bulcd/interpret.py's module docstring - its semantics haven't
-been reconsidered for the restored short-target-period shape yet, an
-explicitly open follow-up from docs/decisions/0010). Treat this script's
-output as unvalidated until that follow-up lands, not as a repeat of the
-original lag finding.
+CHANGE_THRESHOLD (new argument, no confirmed production default - see
+interpret.py's module docstring on the still-missing
+BULCD-AnalysisParameters-v5) is the raw "decrease" probability a
+target-period Event must exceed to count as a crossing.
+
+HISTORICAL NOTE: this script used to be built on the old
+`year_of_change()`/`disturbance_mask_for_year()`, which searched a long,
+CONTINUOUS multi-decade evidence stream (docs/decisions/0003, superseded)
+for a PERSISTENT run's start year, reading `classification_stack`'s
+argmax rather than the raw probability - at recency_factor=1.0 that
+approach lagged a true disturbance by OVER A DECADE (2015 detected vs.
+2003 actual, the B&B Complex Fire test). The real
+afn_interpretBULCDResult source (fetched 2026-08-10, read closely
+2026-08-18) confirmed production never asked that persistent-run question
+at all - it thresholds the raw probability stack and takes the FIRST
+crossing, no persistence required - which interpret.py's
+first_change_year()/disturbance_mask_for_year() now do directly.
 
 AOI source: same grid-cell lookup as debug_grid_cell_map.py
 (`projects/eastern-cascades-bugnet/assets/clipped_grid_35000m`, filtered
 by `grid_id`).
 
 Usage:
-    conda run -n bulcd python scripts/debug_year_of_change_map.py CELL_ID YEAR [RECENCY_FACTOR]
+    conda run -n bulcd python scripts/debug_year_of_change_map.py CELL_ID YEAR [RECENCY_FACTOR] [CHANGE_THRESHOLD]
     e.g. conda run -n bulcd python scripts/debug_year_of_change_map.py 2F 2015
          conda run -n bulcd python scripts/debug_year_of_change_map.py 2F 2007 0.98
-    (CELL_ID defaults to "11A", YEAR defaults to 2020, RECENCY_FACTOR defaults to 1.0/off)
+    (CELL_ID defaults to "11A", YEAR defaults to 2020, RECENCY_FACTOR defaults
+    to 1.0/off, CHANGE_THRESHOLD defaults to 0.5 - see module docstring caveat)
 Prints a URL; fetching it requires an authenticated request (see
 ee.data.get_persistent_credentials() + google.auth.transport.requests,
 used to build/fetch this script's thumbnails so far).
@@ -64,6 +70,7 @@ GRID_ASSET = "projects/eastern-cascades-bugnet/assets/clipped_grid_35000m"
 CELL_ID = sys.argv[1] if len(sys.argv) > 1 else "11A"
 TARGET_YEAR = int(sys.argv[2]) if len(sys.argv) > 2 else 2020
 RECENCY_FACTOR = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+CHANGE_THRESHOLD = float(sys.argv[4]) if len(sys.argv) > 4 else 0.5
 
 grid = ee.FeatureCollection(GRID_ASSET)
 cell = grid.filter(ee.Filter.eq("grid_id", CELL_ID)).first()
@@ -99,7 +106,7 @@ config = BULCDConfig(
     study_area=StudyAreaConfig(aoi_coordinates=AOI),  # mask_water defaults True
     # Restored expectation/target period split (docs/decisions/0010):
     # expectation = the same 2000-2003 baseline as debug_grid_cell_map.py;
-    # target = the single queried YEAR (see interpret.py caveat above).
+    # target = the single queried YEAR (see module docstring above).
     evidence=EvidenceConfig(
         expectation=EvidencePeriodConfig(
             sensors={
@@ -138,19 +145,25 @@ result = engine.run_bulcd(config)
 region = ee.Geometry.Polygon([AOI])
 
 disturbance_mask = interpret.disturbance_mask_for_year(
-    result.classification_stack, TARGET_YEAR, target_class_index=0
+    result.probability_stack,
+    TARGET_YEAR,
+    class_name="decrease",
+    threshold=CHANGE_THRESHOLD,
+    comparison="gt",
 )
 
 # dimensions=512 (debug_disturbance_map.py's value) hits "User memory
-# limit exceeded" here - year_of_change() materializes a full per-pixel
-# time-array (one value per Event, ~200+ for a multi-decade config),
-# much heavier per-pixel than final_probabilities' simple 3-band image.
-# 128 is confirmed to work at this AOI's ~13km scale; a real full-
-# resolution/full-cell map needs an actual batch export
-# (Export.image.toAsset/toDrive - bulcd/export.py doesn't exist yet),
-# not this synchronous preview path.
+# limit exceeded" here - first_change_year() (called internally) still
+# materializes a full per-pixel time-array, same as the function it
+# replaced - 128 is confirmed to work at this AOI's ~13km scale; a real
+# full-resolution/full-cell map needs an actual batch export
+# (Export.image.toAsset/toDrive - see bulcd/export.py), not this
+# synchronous preview path.
 url = disturbance_mask.selfMask().getThumbURL(
     {"region": region, "dimensions": 128, "palette": ["red"], "min": 0, "max": 1}
 )
-print(f"Cell {CELL_ID}, disturbance in {TARGET_YEAR} (recency_factor={RECENCY_FACTOR}):")
+print(
+    f"Cell {CELL_ID}, disturbance in {TARGET_YEAR} "
+    f"(recency_factor={RECENCY_FACTOR}, decrease-probability threshold={CHANGE_THRESHOLD}):"
+)
 print(url)

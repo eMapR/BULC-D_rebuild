@@ -157,14 +157,18 @@ each revealed):
 - **`r-2902-Dev`** — `afn_interpretBULCDResult`
   (`6002.C2-BULCD-Module-analyzeOutputs`,
   `legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`), the post-run
-  analysis step — **fetched 2026-08-10**. Revealed `interpret.py`'s
-  `year_of_change()` likely uses the wrong definition entirely
-  (production's real "when did it change" is the FIRST threshold
-  crossing, no unbroken-run requirement) — a plausible real explanation
-  for the documented 12-year lag finding. Not yet fixed; still missing
+  analysis step — **fetched 2026-08-10**. Revealed `interpret.py`'s old
+  `year_of_change()` used the wrong definition entirely (production's
+  real "when did it change" is the FIRST threshold crossing on the raw
+  probability stack, no unbroken-run requirement, and no argmax
+  involved) — a plausible real explanation for the documented 12-year lag
+  finding. **Fixed 2026-08-18** alongside the expectation/target-split
+  rework — see "Current code state" below for
+  `was_it_ever()`/`first_change_year()`. Still missing
   `BULCD-AnalysisParameters-v5` for the exact
-  `dropThresholdToDenoteChange`/mean-threshold values this module also
-  depends on.
+  `dropThresholdToDenoteChange`/`timingThreshold` values this module also
+  depends on — `threshold` is a required, undefaulted argument in the new
+  functions rather than a guessed number.
 
 Still genuinely unfetched: the full `BULCD-AnalysisParameters-v5`/
 `BULCD-ExportParameters-v5` parameter files (post-run thresholding,
@@ -607,32 +611,68 @@ useful context that isn't obvious from the field names alone:
   (decrease/unchanged/increase) asset, confirmed via `ee.data.getAsset()`,
   then deleted (it was a smoke test, not a result worth keeping). Both
   CLI subcommands are now real-EE-verified, not just code-reviewed.
-- `bulcd/interpret.py` — partial: `year_of_change()`/
-  `disturbance_mask_for_year()` (the "when did this pixel change"
-  question) plus `zscore_anomaly_mask_for_year()` (the "was this pixel
-  abnormal in year Y" question, read straight from the z-score stream
-  with no Bayesian accumulation) — a reconstruction, not a port, of the
-  still-missing `afn_interpretBULCDResult`'s "when did it change"
-  question specifically, not its full analysis surface. Both approaches
-  answer the same real question at two different pipeline layers, with a
-  fundamental noise-robustness-vs-lag tradeoff — see the module
-  docstring, and `docs/findings.md`'s "Year of change" entry for a major
-  finding: at default settings, `year_of_change()` can lag a true
-  disturbance event by over a decade. `year_of_change()`/
-  `disturbance_mask_for_year()` VERIFIED against real Earth Engine at
-  the known B&B Complex Fire point and rendered spatially at reduced
-  resolution over the same test AOI. `zscore_anomaly_mask_for_year()`
-  VERIFIED at full-cell scale. Explicitly does NOT handle "changed, then
-  recovered" — a documented limitation pending the real
-  `afn_interpretBULCDResult` source. **Not yet reconsidered for the
-  restored expectation/target split** (`docs/decisions/0010`,
-  2026-08-11): both functions were built to search a long multi-year
-  `classification_stack`, which is now typically just the target
-  period's short single-season Event sequence - "when did it change"
-  mostly collapses to "did it change within this target window" under
-  the restored design, a materially simpler question this module hasn't
-  been updated to answer yet. Flagged as an open follow-up, not silently
-  left stale.
+- `bulcd/interpret.py` — **reworked 2026-08-18 for the restored
+  expectation/target split** (closes the open follow-up from
+  `docs/decisions/0010`, 2026-08-11) — and, in the course of that rework,
+  actually read the real `afn_interpretBULCDResult` source for the first
+  time (`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`, fetched
+  2026-08-10 but not previously acted on beyond noting its existence).
+  Two real corrections came out of that: (1) production's analysis reads
+  the raw per-Event PROBABILITY stack thresholded per class
+  (`wasItEver`/`firstChange`, both select e.g. `probCls1` and compare
+  against a threshold), never a derived per-Event argmax "winning class"
+  the way the old `classification_stack`-based functions did; (2)
+  "when did it change" is the FIRST threshold crossing, no unbroken-run
+  requirement (`firstChange`, `legacy/6002.C2-...txt` lines 110-137) — not
+  the old `year_of_change()`'s search for a PERSISTENT run holding through
+  the end of the stack, which was a real design mismatch (not just a
+  restored-split scoping issue) and part of why it could lag a real
+  disturbance by over a decade under the old continuous-stream design
+  (`docs/findings.md`'s "Year of change" entry).
+  Old `year_of_change()`/`disturbance_mask_for_year()` (classification_stack,
+  argmax, persistent-run) — REMOVED, not kept alongside the replacement.
+  New: `was_it_ever(probability_stack, class_name, threshold, comparison="gt")`
+  — direct port of production's `wasItEver`/`howOftenWasIt`, returns a
+  2-band boolean+fraction image. `first_change_year(probability_stack,
+  class_name, threshold, comparison="gt")` — port of production's
+  `firstChange`, but returns a real calendar year (read from
+  `system:time_start`, which this rebuild's Events carry and production's
+  own flattened multi-band layers don't) instead of reconstructing an
+  approximate date from a day_step_size offset the way production's
+  `orangeDateDOY` does. `disturbance_mask_for_year()` kept as a thin
+  `first_change_year() == year` wrapper. `class_name` is a
+  `bulcd/engine.py` `_DECISION_CLASS_NAMES` string ("decrease"/
+  "unchanged"/"increase"), not an index. `threshold` has NO default in any
+  of these — production's real threshold values
+  (`dropThresholdToDenoteChange`/`timingThreshold`) live in the
+  still-unfetched `BULCD-AnalysisParameters-v5`, so guessing one is a real
+  unconfirmed-assumption risk this project avoids elsewhere too; the two
+  calling debug/export scripts default their own `CHANGE_THRESHOLD` to
+  0.5 but say so explicitly, not silently. `zscore_anomaly_mask_for_year()`
+  renamed to `zscore_anomaly_mask()` (year parameter dropped —
+  `organize_inputs()` already scores z-scores over the target period
+  only, so filtering by year on top of that was redundant under the
+  restored design; this function isn't in the real source at all, still a
+  documented reconstruction, same posture as `organize_inputs()`). Both
+  `scripts/debug_year_of_change_map.py` and
+  `scripts/export_year_disturbance_map.py` updated to the new API. Still
+  explicitly not ported: `largeDropOrange`'s raw-index magnitude sanity
+  check (needs `organize_inputs()` to expose per-period mean-index images,
+  which it doesn't yet) and "changed, then recovered" detection — neither
+  is in scope for this rework. VALIDATED against real Earth Engine
+  2026-08-18: a synthetic-data unit-style check (5 hand-built Events with
+  a known crossing pattern, including a same-index-0 edge case) confirmed
+  `was_it_ever()`/`first_change_year()`/`disturbance_mask_for_year()`
+  exactly against expected answers; a real `run_bulcd()` +
+  `organize_inputs()` pass against `configs/cell_8c_comparison.yaml` at
+  the known (-121.62455, 46.57266) test pixel ran without error and
+  returned sane values (`was_it_ever`=True at a 0.5 decrease-probability
+  threshold, `first_change_year`=2025 — matching the target period's own
+  year, as expected for this short-target-period config); and
+  `scripts/debug_year_of_change_map.py` ran end-to-end for real and
+  returned a working thumbnail URL. `scripts/export_year_disturbance_map.py`
+  was code-reviewed and compiles but NOT run (it starts a real, billed
+  export task — left for the user to run intentionally).
 - `bulcd/export.py` — `export_image_to_asset()`, a thin wrapper starting
   (not blocking on) an `ee.batch.Export.image.toAsset()` task. Used in
   production for `scripts/export_year_disturbance_map.py` (see

@@ -222,13 +222,11 @@ def run_bulc(
 
         # Carry the source Event's date onto both outputs - neither is
         # otherwise dated, since both are built from arithmetic on `prior`/
-        # `dampened` rather than derived from `source_image` directly. This
-        # is what lets a caller later ask "which year did this pixel's
-        # classification change" (bulcd/interpret.py) instead of only ever
-        # seeing the final accumulated posterior. copyProperties() does NOT
-        # work for this - it only copies non-system properties even when
-        # named explicitly, silently dropping "system:time_start" - .set()
-        # is required for system properties.
+        # `dampened` rather than derived from `source_image` directly.
+        # copyProperties() does NOT work for this - it only copies
+        # non-system properties even when named explicitly, silently
+        # dropping "system:time_start" - .set() is required for system
+        # properties.
         event_time = source_image.get("system:time_start")
         posterior = posterior.set("system:time_start", event_time)
         classification = classification.set("system:time_start", event_time)

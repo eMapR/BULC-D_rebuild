@@ -1,146 +1,222 @@
 """Post-run analysis of a BULC-D result - the legacy `afn_interpretBULCDResult`
-equivalent (module `6002.C2-BULCD-Module-analyzeOutputs`, owned by
-`alemlakes`'s `r-2902-Dev` repo - we don't have that source; see CLAUDE.md
-"Legacy source repos and what's still missing").
+equivalent. Unlike every other module this rebuild is built against, the
+REAL source for this one is fetched: `6002.C2-BULCD-Module-analyzeOutputs`
+(`alemlakes`'s `r-2902-Dev` repo), saved at
+`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`. This module is a partial
+port of it, not a reconstruction from papers like most of the rest of this
+package.
 
-`bulcd/bulc.py`'s `classification_stack` is a time-ordered sequence of
-per-Event argmax classifications, one integer "class" band per Event
-(0=decrease, 1=unchanged, 2=increase - bulcd/engine.py's
-`_DECISION_CLASS_NAMES` order). On its own it only answers "what's the
-class right now" (`final_probabilities`) - it doesn't say WHEN a pixel's
-classification changed, which is what a "disturbance in year Y" query
-needs. This module adds that: `year_of_change()` finds, per pixel, the
-calendar year of the earliest Event that begins an unbroken run of a
-target class lasting through the end of the stack.
+REWORKED 2026-08-18 for the restored expectation/target split
+(`docs/decisions/0010`) - and, in the course of that rework, corrected
+against the real source above (previously only its EXISTENCE and general
+"first crossing, no persistence" shape were known - see CLAUDE.md's
+`r-2902-Dev` entry, fetched 2026-08-10 but not yet acted on here). Two
+real, load-bearing corrections came out of reading it directly:
 
-NOT a port of the real `afn_interpretBULCDResult` - a reconstruction
-built to answer a specific, narrower question (change year), not the
-legacy's full analysis surface ("was it ever," drop/gain probability,
-etc.). Treat as a documented assumption pending the real source, same
-posture as `organize_inputs()`.
+1. **Production's `wasItEver`/timing analysis reads the raw PROBABILITY
+   stack, thresholded per-class, not the argmax classification.** The
+   real source's `wasItEver` (line 20-47) and "timing"/`firstChange`
+   section (line 90-145) both operate on `probabilityStackThroughTime`
+   (this rebuild's `bulc.py` `BulcResult.probability_stack` - each Event's
+   full 3-band posterior, band-selected by class name, e.g. `probCls1` for
+   "down"/decrease) compared against a threshold
+   (`wasItEverValue`/`timingThreshold`) - never on a derived
+   per-Event argmax "winning class" the way the previous version of this
+   module (and `classification_stack`) did. This module's functions now
+   take `probability_stack`, not `classification_stack`, to match.
+2. **"When did it change" is the FIRST threshold crossing, no unbroken-run
+   requirement** (`firstChange`, line 110-137: `changeIndices.reduce(ee.Reducer.min())`
+   over per-Event indices where `prob1.gt(timingThreshold)`) - confirming
+   what CLAUDE.md already flagged from the 2026-08-10 fetch. This directly
+   replaces the previous `year_of_change()`, which searched for a
+   PERSISTENT run holding through the end of the stack - a materially
+   different, stricter question the real source does not ask, and which
+   was already known to lag real disturbances by over a decade under the
+   old long-continuous-stream design (`docs/findings.md`'s "Year of
+   change" entry). `first_change_year()` below is the real definition;
+   under the restored short target-period design, it also naturally
+   answers what `docs/decisions/0010` called the collapsed "did it change
+   within this target window" question - the target period usually spans
+   one calendar year, so a match anywhere returns that one year.
 
-Two genuinely different "was pixel abnormal in year Y" questions live in
-this module, at two different layers of the pipeline (see CLAUDE.md "Year
-of change" for the full discussion of why both exist):
-  - `zscore_anomaly_mask_for_year()` reads `organize_inputs()`'s per-image
-    z-score stream directly - immediate, no lag, but no protection against
-    a single noisy/cloud-contaminated image.
-  - `year_of_change()`/`disturbance_mask_for_year()` read the actual
-    BULC-D sequential classification (`bulc.py`'s `classification_stack`)
-    - noise-robust by design (that robustness IS the point of "preserve
-    the Bayesian updating core"), but can lag a real disturbance by many
-    years before the running classification commits to it (validated:
-    12 years at default settings, at the known 2003 B&B Complex Fire
-    point).
+Not a full port: still missing are the exact production threshold VALUES
+(`dropThresholdToDenoteChange`/`gainThresholdToDenoteChange`/
+`timingThreshold`, part of the still-unfetched `BULCD-AnalysisParameters-v5`)
+- `threshold` is a required argument below, not defaulted, rather than
+guess a number with no source. Also not ported: the DOY-based date
+conversion (`orangeDateDOY`, which reconstructs a calendar date from a
+step index via `dayStepSize`/`targetFirstDOY` because production's
+`probabilityStackThroughTime` bands aren't independently dated) - this
+rebuild's `probability_stack`/`classification_stack` Events already carry
+real `system:time_start` dates (`bulc.py`'s `_step()`), so
+`first_change_year()` reads the real calendar year directly instead of
+reconstructing one; and the raw-index magnitude sanity check
+(`largeDropOrange`, which additionally requires the target period's mean
+index below a threshold AND the expectation period's mean index above
+one) - would need `organize_inputs()` to expose per-period mean index
+images, which it doesn't yet.
+
+`zscore_anomaly_mask()` is the other, independent "was pixel abnormal"
+question living in this module, at a different pipeline layer - not
+present in the real source above at all (it's this rebuild's own fast/
+noisy alternative to the Bayesian layer, still just a documented
+reconstruction, same posture as `organize_inputs()`). It reads
+`organize_inputs()`'s per-image z-score stream (`lof_zscore`) directly, no
+Bayesian accumulation. Since `organize_inputs()` now scores z-scores over
+the target period's collection only (`docs/decisions/0010`), this no
+longer needs its own year filter - the collection passed in is already
+scoped to the window being asked about, same as `probability_stack`.
 """
 
 from __future__ import annotations
 
 import ee
 
+_COMPARISONS = {
+    "gt": lambda image, value: image.gt(value),
+    "gte": lambda image, value: image.gte(value),
+    "lt": lambda image, value: image.lt(value),
+    "lte": lambda image, value: image.lte(value),
+    "eq": lambda image, value: image.eq(value),
+    "neq": lambda image, value: image.neq(value),
+}
 
-def _event_years(classification_stack: ee.ImageCollection) -> ee.List:
-    """Calendar year of each Event, in the same time order as the stack.
+# Far larger than any realistic Event count (even the old, superseded
+# multi-decade continuous-stream design topped out around a few hundred) -
+# used in first_change_year() to mark "never matched" positions so a plain
+# min() reducer can distinguish them from a real, small, matched index
+# without production's own index+1/-1 offset dance (see that function).
+_UNMATCHED_SENTINEL = 1_000_000
+
+
+def _matched_events(
+    probability_stack: ee.ImageCollection, class_name: str, threshold: float, comparison: str
+) -> ee.ImageCollection:
+    if comparison not in _COMPARISONS:
+        raise ValueError(f"comparison must be one of {sorted(_COMPARISONS)}, got {comparison!r}")
+    compare = _COMPARISONS[comparison]
+    return probability_stack.select(class_name).map(lambda image: compare(image, threshold))
+
+
+def _event_years(image_collection: ee.ImageCollection) -> ee.List:
+    """Calendar year of each Event, in the same time order as the collection.
 
     All pixels in a given run share the same sequence of Event dates (one
     evidence collection per AOI, not per pixel), so this is a single
-    collection-wide list, not a per-pixel value.
+    collection-wide list, not a per-pixel value. Requires every image to
+    carry `system:time_start`, which `bulc.run_bulc()` sets on every
+    `probability_stack`/`classification_stack` Event.
     """
-    event_millis = classification_stack.aggregate_array("system:time_start")
+    event_millis = image_collection.aggregate_array("system:time_start")
     return event_millis.map(lambda millis: ee.Date(millis).get("year"))
 
 
-def year_of_change(
-    classification_stack: ee.ImageCollection, target_class_index: int = 0
+def was_it_ever(
+    probability_stack: ee.ImageCollection,
+    class_name: str,
+    threshold: float,
+    comparison: str = "gt",
 ) -> ee.Image:
-    """Per-pixel calendar year of the start of a persistent run of
-    `target_class_index` (default 0 = "decrease", bulcd/engine.py's
-    convention) lasting through the LAST Event in the stack.
+    """Direct port of the real source's `wasItEver`/`howOftenWasIt`
+    (`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt` lines 20-47).
 
-    Masked wherever the pixel's final Event isn't `target_class_index` -
-    there's no "year of change" for a pixel that isn't currently classified
-    as changed. This deliberately does NOT detect "changed, then recovered"
-    - a pixel that flips to decrease and later flips back to unchanged
-    before the stack ends has no persistent suffix run and is masked here,
-    same as a pixel that never changed at all. That's a real limitation
-    (see module docstring - the real `afn_interpretBULCDResult` likely
-    handles this; we don't have its source), not an oversight: this
-    function only answers "when did the CURRENT state begin," not a full
-    change-history log.
+    Returns a 2-band image: "was_it_ever" (boolean - True if ANY Event's
+    `class_name` probability satisfies `comparison threshold`, e.g.
+    `class_name="decrease", threshold=0.5, comparison="gt"` for "was this
+    pixel ever more than 50% likely to be decreasing") and
+    "how_often_was_it" (fraction of Events that matched, 0-1).
 
-    Requires `classification_stack` to carry `system:time_start` on every
-    image, which `bulc.run_bulc()` has done since 2026-07-30 (see CLAUDE.md
-    "Year of change") - an older classification_stack won't work here.
+    `class_name` is one of `bulcd/engine.py`'s `_DECISION_CLASS_NAMES`
+    ("decrease"/"unchanged"/"increase") - `probability_stack`'s band
+    names, confirmed by `bulc.py`'s band-order contract (see that
+    module's docstring).
     """
-    # pixelType is required (not just optional) here because the values are
-    # a computed ee.List, not a Python literal - ee.Array can't infer a
-    # numeric type from something it can't inspect client-side.
-    years = ee.Array(_event_years(classification_stack), ee.PixelType.int32())
-    n_events = classification_stack.size()
+    matches = _matched_events(probability_stack, class_name, threshold, comparison)
+    match_count = matches.sum()
+    n_events = probability_stack.size()
+    was_it_ever_band = match_count.gte(1).rename("was_it_ever")
+    how_often_band = match_count.divide(n_events).rename("how_often_was_it")
+    return ee.Image.cat([was_it_ever_band, how_often_band])
 
-    # A plain 0..N-1 index sequence, built server-side (n_events is an
-    # ee.Number, not known client-side) - same length/shape contract as
-    # `years` above, both broadcast identically to every pixel.
+
+def first_change_year(
+    probability_stack: ee.ImageCollection,
+    class_name: str,
+    threshold: float,
+    comparison: str = "gt",
+) -> ee.Image:
+    """Per-pixel calendar year of the FIRST Event where `class_name`'s
+    probability satisfies `comparison threshold` - the real source's
+    `firstChange` logic (`legacy/6002.C2-BULCD-Module-analyzeOutputs.txt`
+    lines 110-137), with no persistent-run requirement: a single Event
+    crossing the threshold is enough, even if a later Event doesn't.
+
+    Masked wherever no Event ever crosses (there's no "year of change" for
+    a pixel that never showed the signal). Under the restored, typically
+    single-season target period, this usually resolves to one candidate
+    year - the target period's own year - but generalizes correctly for a
+    wider or non-contiguous target window.
+    """
+    matches = _matched_events(probability_stack, class_name, threshold, comparison)
+    # ImageCollection.toArray() produces a 2-D array per pixel (image axis
+    # x band axis), even though `class_name` selects a single band -
+    # arrayProject([0]) collapses the size-1 band axis away, leaving a
+    # plain 1-D time series (same idiom as bulc.py's array-image usage).
+    match_array = matches.toArray().arrayProject([0])
+    n_events = probability_stack.size()
+
     index_seq = ee.Array(ee.List.sequence(0, n_events.subtract(1)), ee.PixelType.float())
+    position = ee.Image(index_seq)
+    not_matched = match_array.multiply(-1).add(1)
+    # Matched positions keep their own (small) index; unmatched positions
+    # get pushed to a value no real index could reach - lets a plain
+    # min() reducer read off "the first matched index" directly, with
+    # "never matched" reading back out as the sentinel itself.
+    candidate = position.multiply(match_array).add(not_matched.multiply(_UNMATCHED_SENTINEL))
 
-    # ImageCollection.toArray() produces a 2-D array per pixel (image axis x
-    # band axis), even though "class" is a single band - arrayProject([0])
-    # collapses the size-1 band axis away, leaving a plain 1-D time series.
-    class_array = classification_stack.toArray().arrayProject([0])
-    is_mismatch = class_array.neq(target_class_index)
+    first_index = candidate.arrayReduce(ee.Reducer.min(), [0]).arrayGet([0])
+    ever_matched = first_index.lt(_UNMATCHED_SENTINEL)
+    # Clamp so arrayGet never sees an out-of-range index - the clamped
+    # value is discarded anyway via the mask below.
+    first_index = first_index.max(0).min(n_events.subtract(1)).toInt()
 
-    # arraySlice doesn't support a negative step (no native reverse), so
-    # instead of scanning backward, find the LAST mismatching index directly:
-    # at each position p, "(p+1) if mismatch else 0", then take the array
-    # max. The result is (index of last mismatch)+1 - i.e. the first index
-    # of the unbroken target-class run through the end of the series. If
-    # there's no mismatch at all, this is 0 (the whole series is the target
-    # class). If the very last position itself is a mismatch, this equals
-    # n_events (one past the end) - out of range, which is exactly the
-    # "no persistent run reaches the end" case and gets masked below.
-    mismatch_position_plus_one = ee.Image(index_seq).add(1).multiply(is_mismatch)
-    change_index = mismatch_position_plus_one.arrayReduce(ee.Reducer.max(), [0]).arrayGet([0])
-
-    is_currently_target = change_index.lt(n_events)
-    # Clamp so arrayGet never sees an out-of-range index - the clamped value
-    # is discarded anyway via the mask below.
-    change_index = change_index.min(n_events.subtract(1)).max(0).toInt()
-
-    years_image = ee.Image(years)
-    change_year = years_image.arrayGet([change_index]).rename("change_year")
-
-    return change_year.updateMask(is_currently_target)
+    years = ee.Array(_event_years(probability_stack), ee.PixelType.float())
+    first_year = ee.Image(years).arrayGet([first_index]).rename("first_change_year")
+    return first_year.updateMask(ever_matched)
 
 
 def disturbance_mask_for_year(
-    classification_stack: ee.ImageCollection, year: int, target_class_index: int = 0
+    probability_stack: ee.ImageCollection,
+    year: int,
+    class_name: str,
+    threshold: float,
+    comparison: str = "gt",
 ) -> ee.Image:
-    """Boolean mask: True where `year_of_change()` equals `year` exactly -
-    i.e. pixels whose persistent shift to `target_class_index` began in
-    that specific calendar year, not merely "changed by" that year (see
-    year_of_change()'s docstring for what it does/doesn't capture)."""
-    return year_of_change(classification_stack, target_class_index).eq(year)
+    """Boolean mask: True where `first_change_year()` equals `year`
+    exactly - i.e. pixels whose first threshold crossing into
+    `class_name` happened in that specific calendar year."""
+    return (
+        first_change_year(probability_stack, class_name, threshold, comparison)
+        .eq(year)
+        .rename("disturbance_mask")
+    )
 
 
-def zscore_anomaly_mask_for_year(
-    zscore_collection: ee.ImageCollection, year: int, threshold: float = -2.0
-) -> ee.Image:
-    """Boolean mask: True where ANY image within calendar year `year` has a
-    z-score at or below `threshold` (default -2, matching the pipeline's
-    own `bin_cuts` default's most extreme cut - see bulcd/config/schema.py).
+def zscore_anomaly_mask(zscore_collection: ee.ImageCollection, threshold: float = -2.0) -> ee.Image:
+    """Boolean mask: True where ANY image in `zscore_collection` (typically
+    `organize_inputs()`'s `lof_zscore`, already scoped to the target
+    period) has a z-score at or below `threshold` (default -2, matching
+    the pipeline's own `bin_cuts` default's most extreme cut - see
+    bulcd/config/schema.py).
 
-    This is the FAST layer, not the robust one: it reads
-    `organize_inputs()`'s per-image z-score stream (`lof_zscore`) directly,
-    with no Bayesian accumulation across Events at all - so it answers "was
-    this year's data abnormal versus the expectation baseline," immediately,
-    the moment the imagery exists. Unlike `disturbance_mask_for_year()`, a
-    single cloud-shadow-contaminated or otherwise noisy image can trigger
-    this just as readily as a real disturbance - there's no sustained-
-    evidence requirement to filter that out. See module docstring / CLAUDE.md
-    "Year of change" for why both layers exist and when to use which.
+    This is the FAST layer, not the robust one: no Bayesian accumulation
+    across Events at all, so it answers "was this window's data abnormal
+    versus the expectation baseline," immediately, the moment the imagery
+    exists. Unlike `was_it_ever()`/`first_change_year()`, a single
+    cloud-shadow-contaminated or otherwise noisy image can trigger this
+    just as readily as a real disturbance - there's no sustained-evidence
+    requirement to filter that out. See module docstring for why both
+    layers exist and when to use which.
     """
-    year_start = f"{year}-01-01"
-    year_end = f"{year + 1}-01-01"
-    year_images = zscore_collection.filterDate(year_start, year_end)
-    min_zscore = year_images.select("zscore").min()
+    min_zscore = zscore_collection.select("zscore").min()
     return min_zscore.lte(threshold).rename("zscore_anomaly")
