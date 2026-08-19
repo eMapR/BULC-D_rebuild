@@ -362,6 +362,23 @@ def _bin_evidence_by_day_step(
     data where any exists, masked where none does) instead of erroring on
     an empty ImageCollection.
 
+    The placeholder must be explicitly cast to float: `ee.Image.constant(0)`
+    is an int-typed constant by default, invisible while every bin has at
+    least one real (float) image to median-blend with (mixed-type median
+    promotes to float), but for a bin with ZERO real images - e.g. a target
+    period whose DOY range extends past the current date, which is
+    otherwise a completely normal thing to configure for a near-real-time
+    run - the placeholder alone becomes that bin's entire output, still
+    int-typed. `ee.data.exportImage` then rejects the resulting
+    ImageCollection as non-homogeneous ("Expected a homogeneous image
+    collection... Mismatched type for band '<band>'") since it mixes float
+    bins with this one int bin. CONFIRMED 2026-08-19: a real export
+    (`bulcd_test_bugs_2026_v2_final_probabilities`, task
+    AWYCZOPLQIMH3M5CZOO4BGCT) failed with exactly this error; reproduced
+    directly via `ee.Image.constant(0).rename(band).selfMask().getInfo()`,
+    which shows `{'precision': 'int', 'min': 0, 'max': 0}` versus a real
+    evidence band's plain `{'precision': 'float'}`.
+
     Implementation note: an earlier version of this function used
     `.map()` over the bin list with an independent `.filterDate()` inside
     - each of ~140 bins re-scanning the full evidence collection - which
@@ -371,7 +388,7 @@ def _bin_evidence_by_day_step(
     date-range membership in another" and avoids that blowup entirely.
     """
     day_step_millis = day_step_size * 24 * 60 * 60 * 1000
-    placeholder = ee.Image.constant(0).rename(band).selfMask()
+    placeholder = ee.Image.constant(0).rename(band).selfMask().cast({band: "float"})
 
     def _bin_starts_for_year(year: ee.Number) -> ee.List:
         start_millis = ee.Date.fromYMD(year, 1, 1).advance(ee.Number(first_doy).subtract(1), "day").millis()
