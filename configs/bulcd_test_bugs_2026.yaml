@@ -1,0 +1,133 @@
+# BULC-D-Test-Bugs AOI (projects/emapr-lab-general/assets/BULC-D-Test-Bugs),
+# target year 2026. Single-polygon FeatureCollection asset near
+# (-119.16, 44.12), fetched live 2026-08-18 via ee.data.getAsset() (TABLE,
+# 1 feature) - not one of this project's existing grid-cell AOIs.
+#
+# Algorithm parameters (sensors, DOY window, cloud threshold, day_step_size,
+# modality, sensitivity, bin_cuts, and all bulc_advanced_params including
+# the custom_transition_matrix) are carried over unchanged from
+# configs/cell_8c_comparison.yaml - those are the REAL, GUI-confirmed
+# production values (see that file's own header and CLAUDE.md), not
+# placeholders, so reusing them here is the closest match to a real
+# production run rather than a guess. Only study_area (now an aoi_asset
+# instead of inline coordinates) and evidence.expectation/target's years
+# changed: expectation = 2020-2024 (5-year multi-year baseline, per
+# 2026-08-18 direction - last_year 2025 since it's EXCLUSIVE), target =
+# 2026. v2: re-run of the original (expectation = single year 2025) with
+# the widened expectation window - description_prefix bumped to
+# bulcd_test_bugs_2026_v2 so it exports to a new asset rather than
+# overwriting the v1 asset (task CT5DSJ5VSJNDTYAVKTYJWY6J, COMPLETED). v2
+# itself FAILED (task AWYCZOPLQIMH3M5CZOO4BGCT, 2026-08-19): "Expected a
+# homogeneous image collection... Mismatched type for band 'nbr'" - a real
+# bug in bulcd/inputs.py's day_step_size binning placeholder (int-typed
+# constant vs. real float evidence bands), exposed here because target's
+# last_doy=288 extends past today's actual DOY (~231 on 2026-08-19),
+# leaving several trailing bins with zero real images. Fixed in inputs.py
+# (placeholder now explicitly cast to float); description_prefix bumped to
+# _v3 to re-run with the fix rather than overwrite the failed v2 attempt.
+#
+# mask_non_forest left at schema default (true) rather than cell 8C's
+# comparison-only false override - this is a real run, not a GUI-parity
+# comparison, so the forest mask should be on (see schema.py's
+# StudyAreaConfig.mask_non_forest docstring).
+
+schema_version: "1"
+
+study_area:
+  aoi_asset: "projects/emapr-lab-general/assets/BULC-D-Test-Bugs"
+  crs: "EPSG:4326"
+  scale: 30
+  forest_mask_asset: null
+  mask_water: true
+  mask_non_forest: true
+
+evidence:
+  day_step_size: 3
+  expectation:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2020
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      L9:
+        enabled: true
+        first_year: 2020
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      S2:
+        enabled: true
+        first_year: 2020
+        last_year: 2025
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+  target:
+    sensors:
+      L8:
+        enabled: true
+        first_year: 2026
+        last_year: 2027
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      L9:
+        enabled: true
+        first_year: 2026
+        last_year: 2027
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+      S2:
+        enabled: true
+        first_year: 2026
+        last_year: 2027
+        first_doy: 74
+        last_doy: 288
+        cloud_cover_threshold: 70
+
+reduction:
+  band: nbr
+
+modality:
+  constant: true
+  unimodal: true
+  linear: false
+  bimodal: false
+  trimodal: false
+
+sensitivity:
+  z_score_numerator_factor: 1
+  z_score_denominator_factor: 0.05
+
+bin_cuts: [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+harmonic_constant: false
+plotting_means: true
+verbose: false
+
+bulc_advanced_params:
+  dampening_factor: 0.7
+  recency_factor: 1.0
+  initializing_leveler: 0.7
+  posterior_leveler: 0.9
+  custom_transition_matrix:
+    - [0.83, 0.08, 0.08]
+    - [0.66, 0.24, 0.08]
+    - [0.53, 0.37, 0.08]
+    - [0.14, 0.76, 0.08]
+    - [0.08, 0.83, 0.08]
+    - [0.08, 0.83, 0.08]
+    - [0.08, 0.76, 0.14]
+    - [0.08, 0.37, 0.53]
+    - [0.08, 0.24, 0.66]
+    - [0.08, 0.08, 0.83]
+
+export:
+  destination: asset
+  asset_folder: "projects/bulcd-python-rebuild/assets/"
+  max_pixels: 1000000000000
+  description_prefix: bulcd_test_bugs_2026_v3
